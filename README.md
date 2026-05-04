@@ -1,4 +1,4 @@
-# Multimodal Time Series Benchmark
+# MMTT-Bench: Multiodal Text Time Series Benchmark
 
 This repository is the official implementation of [When Does Text Inform? Benchmarking Information-Theoretic Metrics for Multimodal Time-Series Forecasting](Under Review).
 
