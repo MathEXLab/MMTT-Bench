@@ -1,6 +1,6 @@
 # Multimodal Time Series Benchmark
 
-This repository is the official implementation of [Can LLMs Use Text to Improve Time Series Forecasting?](https://arxiv.org/abs/XXXX.XXXXX).
+This repository is the official implementation of [When Does Text Inform? Benchmarking Information-Theoretic Metrics for Multimodal Time-Series Forecasting](Under Review).
 
 A synthetic benchmark for measuring whether natural language annotations carry information about future time series values, and whether regression models can exploit that information. The benchmark combines controlled signal generation with ground-truth annotation categories to give reproducible measurements via information theory and supervised regression.
 
@@ -38,7 +38,7 @@ src/
       sine_generator.py             # Generate synthetic sine-wave benchmark splits
       mixture.py                    # Augment splits with mixture annotation categories
       timemmd.py                    # Convert TimeMMD CSV dataset to benchmark format
-benchmark_splits*/                  # Generated dataset splits (train / val / test JSON)
+datasets/benchmark_splits*/                  # Generated dataset splits (train / val / test JSON)
 results/                            # Experiment outputs (JSON, CSV, plots)
 ```
 
