@@ -1,0 +1,52 @@
+# Example config for run.py
+# Run with: python run.py example_config.yaml --output results/my_run.json
+
+data_path: datasets/timemmd_splits/train.json
+
+embedding_type: sentence_transformer
+model_name:     sentence-transformers/all-distilroberta-v1
+ts_tokenizer:   patch_mean
+horizon_steps:  12
+lookback_steps: 12
+patch_len:      4
+stride:         2
+
+# compute_kwargs are passed to every metric's .compute() call.
+# pca_dim applies to both MI and PID.
+compute_kwargs:
+  pca_dim: 16
+  n_bootstrap:  20
+  strategy: energy
+  y_channel: 11
+
+# One or more metrics. Each entry maps metric name → its __init__ kwargs.
+# category_data is built once and shared across all metrics.
+metrics:
+  mutual_information:
+    n_neighbours: 1
+    n_subsample_reps:  20
+  mine:
+     mine_iters: 500
+     n_bootstrap: 20
+     mine_batch_size: 256
+     lr: 0.0001
+  infonce:
+     n_bootstrap: 20   # point estimate — training is slow
+     hidden_dim:  128
+     n_iters:     500
+     batch_size:  256     # ceiling on MI = log(64) ≈ 4.2 nats
+     lr:          0.001
+  cca:
+    n_bootstrap: 20    # same as KSG for fair variance comparison
+    eps: 1e-5   
+  v_information:
+    cv: 5
+    n_bootstrap:  20
+  pid:
+    n_clusters_ts:   4
+    n_clusters_text: 16
+    n_bins_y:        4
+    n_bootstrap:  20
+# Optional sweep block. param can be a top-level field (e.g. model_name,
+# ts_tokenizer) or a key inside compute_kwargs (e.g. pca_dim).
+# category_data is only rebuilt when the swept param affects data loading.
