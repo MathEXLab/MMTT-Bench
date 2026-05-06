@@ -292,8 +292,6 @@ class PIDMetric:
         X_text → KMeans cluster labels  (n_clusters_text clusters)
         Y      → rounded to n_bins_y equally-spaced bins
 
-    Unlike MutualInformationMetric, PID does not bootstrap — the CVXPY
-    solver is expensive (~seconds per call). Run on pooled data.
 
     Parameters
     ----------
@@ -357,6 +355,12 @@ class PIDMetric:
             # np.digitize returns 0-indexed bin IDs (0 to 3)
             bin_indices = np.digitize(Y, midpoints)
             return bin_indices
+        elif strategy == 'energy':
+            # we know values are close to 1,0,-5,-1
+            midpoints = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5]
+            # np.digitize returns 0-indexed bin IDs (0 to 3)
+            bin_indices = np.digitize(Y, midpoints)
+            return bin_indices
         else:  # equal-width fallback
             bins = np.linspace(Y.min()-1e-9, Y.max()+1e-9, self.n_bins_y+1)
             return np.digitize(Y, bins[1:-1])
@@ -367,7 +371,7 @@ class PIDMetric:
         pca_dim:       int  = 4,
         pca_text:      object = None,
         strategy:      str  = 'sign',
-        n_bootstrap:   int  = 10,
+        n_bootstrap:   int  = 1,
         y_channel:     int  = 0,   # which column of Y to discretise;
                                     # 0 = first future step of x-component
         **_kwargs,
@@ -375,10 +379,13 @@ class PIDMetric:
         """
         Compute PID per annotation category.
 
-        Note: no bootstrapping — CVXPY is too slow for bootstrap loops.
-        Returns point estimates only, with no _mean/_std suffix, to keep
-        results compatible with METRICS registry but distinct from
-        MutualInformationMetric output.
+        The KMeans codebook is fitted once on all pooled data and held fixed
+        across bootstrap iterations, so resampling reflects genuine sampling
+        variance rather than discretisation instability.
+
+        When n_bootstrap=1 (default) the full data is used without resampling,
+        returning a single-element list per category (compatible with
+        build_eval_table's np.mean/np.std handling).
 
         Parameters
         ----------
@@ -386,22 +393,23 @@ class PIDMetric:
         pca_dim       : PCA dims to apply to text before clustering
         pca_text      : pre-fitted PCA (fitted externally on pooled x)
                         if None, fits on pooled data here
-        n_bootstrap    : bootstraps KMeans seeds
+        n_bootstrap   : bootstrap resamples; 1 = point estimate only
 
         Returns
         -------
         {
-          'redundancy':  {cat: float},
-          'unique_ts':   {cat: float},
-          'unique_text': {cat: float},
-          'synergy':     {cat: float},
+          'redundancy':  {cat: [float, ...]},
+          'unique_ts':   {cat: [float, ...]},
+          'unique_text': {cat: [float, ...]},
+          'synergy':     {cat: [float, ...]},
         }
         """
         pooled, pca_text = _prepare_pooled(category_data, pca_text)
+        rng = np.random.default_rng(self.seed)
 
         # ── FIT TS AND TEXT KMEANS ONCE ON ALL CATEGORIES POOLED ─────────
-        # Both must use a shared codebook so that PID atoms are comparable
-        # across categories and unique_ts is not affected by text variation.
+        # Codebook is fixed for all bootstrap iterations so that variance in
+        # resampled estimates reflects data uncertainty, not cluster instability.
         all_X_ts = np.vstack([ts_p for _, ts_p, _ in pooled.values()])
         all_X_text = np.vstack([
             pca_text.transform(x_p)[:, :pca_dim]
@@ -445,24 +453,38 @@ class PIDMetric:
             x_pooled, X_ts, Y = pooled[cat]
             X_text = pca_text.transform(x_pooled)[:, :pca_dim]
 
-            # Apply pre-fitted KMeans to this category's data
-            x1 = ts_kmeans.predict(X_ts).reshape(-1, 1).ravel()
-            x2 = text_kmeans.predict(X_text).reshape(-1, 1).ravel()
+            # Predict cluster labels using fixed codebook
+            x1_full = ts_kmeans.predict(X_ts).ravel()
+            x2_full = text_kmeans.predict(X_text).ravel()
+            y_full  = y_disc_per_cat[cat]
+            n       = len(x1_full)
 
-            y  = y_disc_per_cat[cat]
+            cat_samples: dict[str, list] = {k: [] for k in pid_keys}
 
-            P, _ = _rus.convert_data_to_distribution(x1, x2, y)
-            raw  = _rus.get_measure(P)
+            for b in range(n_bootstrap):
+                if n_bootstrap == 1:
+                    idx = np.arange(n)
+                else:
+                    idx = rng.integers(0, n, size=n)
 
-            results['redundancy'][cat]  = float(raw['redundancy'])
-            results['unique_ts'][cat]   = float(raw['unique1'])
-            results['unique_text'][cat] = float(raw['unique2'])
-            results['synergy'][cat]     = float(raw['synergy'])
+                P, _ = _rus.convert_data_to_distribution(
+                    x1_full[idx], x2_full[idx], y_full[idx]
+                )
+                raw = _rus.get_measure(P)
 
-            print(f"  {cat}: R={raw['redundancy']:.4f}  "
-              f"U_ts={raw['unique1']:.4f}  "
-              f"U_text={raw['unique2']:.4f}  "
-              f"S={raw['synergy']:.4f}")
+                cat_samples['redundancy'].append(float(raw['redundancy']))
+                cat_samples['unique_ts'].append(float(raw['unique1']))
+                cat_samples['unique_text'].append(float(raw['unique2']))
+                cat_samples['synergy'].append(float(raw['synergy']))
+
+            for k in pid_keys:
+                results[k][cat] = cat_samples[k]
+
+            print(f"  {cat}: R={np.mean(cat_samples['redundancy']):.4f}  "
+                  f"U_ts={np.mean(cat_samples['unique_ts']):.4f}  "
+                  f"U_text={np.mean(cat_samples['unique_text']):.4f}  "
+                  f"S={np.mean(cat_samples['synergy']):.4f}"
+                  + (f"  (n_bootstrap={n_bootstrap})" if n_bootstrap > 1 else ""))
 
         return results
 

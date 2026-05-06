@@ -22,7 +22,6 @@
 #   ./run_finals.sh sine rossler       # specific configs by name
 #   SKIP_TRAIN=1 ./run_finals.sh       # metrics only (no training)
 #   SKIP_METRICS=1 ./run_finals.sh     # training only
-#   NO_WANDB=1 ./run_finals.sh         # skip W&B logging
 
 set -euo pipefail
 
@@ -141,15 +140,9 @@ for NAME in "${NAMES[@]}"; do
             MODEL_OUT="$RESULTS_DIR/${OUT_STEM}_model.json"
             echo "  [train]   → $MODEL_OUT"
 
-            WANDB_FLAG=""
-            if [[ -n "${NO_WANDB:-}" ]]; then
-                WANDB_FLAG="--no-wandb"
-            fi
-
             python train.py \
                 --config "$RUN_CFG" \
-                --output "$MODEL_OUT" \
-                $WANDB_FLAG
+                --output "$MODEL_OUT"
         fi
 
         echo ""
@@ -167,12 +160,9 @@ echo "════════════════════════�
 echo "Done. Results written to $RESULTS_DIR/"
 echo ""
 echo "To compare metrics vs model performance, run e.g.:"
-echo "  python compare.py \\"
+echo "  python plot.py \\"
 echo "      --metrics $RESULTS_DIR/sine_metrics.json \\"
 echo "      --models  $RESULTS_DIR/sine_model.json \\"
 echo "      --output-dir $RESULTS_DIR/plots/"
 echo ""
-echo "To plot the metrics bar charts:"
-echo "  python plot.py $RESULTS_DIR/sine_metrics.json \\"
-echo "      --output-dir $RESULTS_DIR/plots/"
 echo "════════════════════════════════════════════════════════════"

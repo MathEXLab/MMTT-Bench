@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr, kendalltau
 
-from src.benchmark.viz import (
+from src.mmtt_bench.viz import (
     METRIC_LABELS,
     METRIC_DISPLAY,
     CONDITIONAL_KEY,
@@ -54,6 +54,7 @@ from src.benchmark.viz import (
     plot_info_vs_delta,
     plot_correlation_trends,
     plot_delta_bars,
+    plot_model_mixture,
 )
 
 
@@ -171,16 +172,21 @@ def build_eval_table(
             if ckey not in results:
                 continue
             col_vals = []
+            std_vals = []
             for cat in all_cats:
                 if cat == "no_text":
                     col_vals.append(np.nan)
+                    std_vals.append(np.nan)
                     continue
                 v = results[ckey].get(cat, np.nan)
-                if isinstance(v, (list, np.ndarray)):
-                    col_vals.append(float(np.mean(v)) if len(v) else np.nan)
+                if isinstance(v, (list, np.ndarray)) and len(v):
+                    col_vals.append(float(np.mean(v)))
+                    std_vals.append(float(np.std(v)))
                 else:
-                    col_vals.append(v)
+                    col_vals.append(float(v) if not isinstance(v, (list, np.ndarray)) else np.nan)
+                    std_vals.append(np.nan)
             row_data[family] = col_vals
+            row_data[f'{family}_std'] = std_vals
 
         for delta_key in ("delta_r2", "delta_rmse", "delta_mae", "delta_mse"):
             row_data[delta_key] = [deltas[delta_key].get(cat, np.nan) for cat in all_cats]
@@ -360,6 +366,14 @@ def main() -> None:
                 title=f"{label} — {args.perf_metric} by category",
                 save_path=_out(f"{label}_delta_bars_{args.perf_metric}.png"),
             )
+
+            if "mixture" in Path(metrics_path).name or "mixture" in Path(models_path).name:
+                plot_model_mixture(
+                    tables, info_metrics, categories,
+                    perf_metric=args.perf_metric,
+                    title=f"{label} — mixture degradation ({args.perf_metric})",
+                    save_path=_out(f"{label}_mixture_{args.perf_metric}.png"),
+                )
         return
 
     # ── Sweep / overlay mode (positional results args) ────────────────────────

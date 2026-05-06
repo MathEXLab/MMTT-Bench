@@ -8,14 +8,12 @@ Builds category_data exactly as Experiment does, then:
   3. Concatenates ts + text_pca as the joint input embedding
   4. Trains Ridge and MLP on joint embeddings → predict y_future
   5. Evaluates regression metrics set
-  6. Logs everything to Weights & Biases
-  7. Optionally writes a JSON results file for use with compare.py
+  6. Optionally writes a JSON results file for use with compare.py
 
 Usage
 -----
     python train.py --train-path benchmark_splits/train.json \\
                     --val-path benchmark_splits/val.json \\
-                    --wandb-project my-project \\
                     --output results/final/sine_model.json
 
     # From a final_config YAML (shares params with run.py):
@@ -30,7 +28,6 @@ import json
 import os
 import numpy as np
 import yaml
-import wandb
 from sklearn.decomposition import PCA
 from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import Ridge
@@ -84,7 +81,7 @@ def _pool_and_embed(category_data: dict, pca_dim: int, pca_text: PCA = None):
     pooled   : {cat: {'ts', 'x_pca', 'joint', 'y'}}
     pca_text : fitted PCA (for reuse on held-out splits)
     """
-    from src.benchmark.metrics import _pool_by_annotation_point
+    from src.mmtt_bench.metrics import _pool_by_annotation_point
 
     pooled: dict[str, dict] = {}
     for cat, vals in category_data.items():
@@ -151,7 +148,7 @@ def _regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description='Train Ridge/MLP on joint ts+text embeddings with wandb logging'
+        description='Train Ridge/MLP on joint ts+text embeddings'
     )
     # ── Config shortcut (shares YAML format with run.py) ──────────────────
     p.add_argument('--config', default=None,
@@ -185,19 +182,10 @@ def parse_args() -> argparse.Namespace:
                    help='Which models to train')
     p.add_argument('--text-categories', nargs='*', default=None,
                    help='Text categories to compare (default: all in data). '
-                        'Each becomes a separate wandb run alongside no_text.')
-    # ── WandB ─────────────────────────────────────────────────────────────
-    p.add_argument('--wandb-project', default='mi-bench',
-                   help='Weights & Biases project name')
-    p.add_argument('--wandb-entity',   default='mathexlab',
-                   help='W&B entity (team or user), uses default if omitted')
-    p.add_argument('--wandb-run-name', default=None,
-                   help='Human-readable run name')
+                        'Each run alongside no_text.')
     # ── Output ────────────────────────────────────────────────────────────
     p.add_argument('--output', '-o', default=None,
                    help='Path to write JSON results (for use with compare.py)')
-    p.add_argument('--no-wandb', action='store_true',
-                   help='Skip W&B logging (useful for quick local runs)')
 
     args = p.parse_args()
 
@@ -262,8 +250,8 @@ def main() -> None:
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-    from src.benchmark.data      import build_category_data, load_split
-    from src.benchmark.tokenizers import TEXT_TOKENIZERS, TS_TOKENIZERS
+    from src.mmtt_bench.data      import build_category_data, load_split
+    from src.mmtt_bench.tokenizers import TEXT_TOKENIZERS, TS_TOKENIZERS
 
     def _build(path):
         raw = load_split(path)
@@ -330,8 +318,6 @@ def main() -> None:
     # ── Loop over input configurations ────────────────────────────────────
     for input_config in input_configs:
         config_name = input_config or 'no_text'
-        run_label   = (f'{args.wandb_run_name}_{config_name}'
-                       if args.wandb_run_name else config_name)
 
         # Select rows and features for this configuration
         if input_config is None:
@@ -361,21 +347,6 @@ def main() -> None:
 
         print(f'\n══ {config_name}: train={X_tr_s.shape}  val={X_val_s.shape} ══')
 
-        if not args.no_wandb:
-            wandb.init(
-                project = args.wandb_project,
-                entity  = args.wandb_entity,
-                name    = run_label,
-                config  = {
-                    **base_config,
-                    'input_config': config_name,
-                    'n_train':      len(X_tr_s),
-                    'n_val':        len(X_val_s),
-                    'input_dim':    X_tr_s.shape[1],
-                },
-                reinit = True,
-            )
-
         config_results: dict[str, dict] = {}
 
         # ── Train and evaluate each model ─────────────────────────────────
@@ -387,9 +358,6 @@ def main() -> None:
 
             overall = _regression_metrics(y_val, y_pred)
             print(f'R²={overall["r2"]:.3f}  RMSE={overall["rmse"]:.4f}')
-
-            if not args.no_wandb:
-                wandb.log({f'{model_key}/val/{k}': v for k, v in overall.items()})
 
             # ── Per-category breakdown ─────────────────────────────────────
             per_cat: dict[str, dict] = {}
@@ -403,15 +371,10 @@ def main() -> None:
                 per_cat[cat] = cat_reg
                 print(f'    {cat:<22s} N={n_cat:<4d} '
                       f'R²={cat_reg["r2"]:.3f}  RMSE={cat_reg["rmse"]:.4f}')
-                if not args.no_wandb:
-                    wandb.log({f'{model_key}/val/{cat}/{k}': v
-                               for k, v in cat_reg.items()})
 
             config_results[model_key] = {'overall': overall, 'per_category': per_cat}
 
         all_results[config_name] = config_results
-        if not args.no_wandb:
-            wandb.finish()
 
     # ── Write summary CSV ─────────────────────────────────────────────────
     csv_path = os.path.join(os.path.dirname(args.train_path), 'results.csv')

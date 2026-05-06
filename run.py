@@ -111,8 +111,8 @@ def _parse_metrics(cfg: dict) -> dict:
 
 def _build_category_data(cfg: dict):
     """Build category_data from config — expensive (loads model)."""
-    from src.benchmark.data import build_category_data, load_split, shuffle_text_annotations
-    from src.benchmark.tokenizers import TEXT_TOKENIZERS, TS_TOKENIZERS
+    from src.mmtt_bench.data import build_category_data, load_split, shuffle_text_annotations
+    from src.mmtt_bench.tokenizers import TEXT_TOKENIZERS, TS_TOKENIZERS
 
     raw      = load_split(cfg["data_path"])
     text_tok = TEXT_TOKENIZERS[cfg.get("embedding_type", "sentence_transformer")](
@@ -143,7 +143,7 @@ def _build_category_data(cfg: dict):
 
 def _run_metrics(category_data, metrics_cfg: dict, compute_kwargs: dict) -> dict:
     """Run all metrics on the same category_data. Returns {metric: results}."""
-    from src.benchmark.metrics import METRICS
+    from src.mmtt_bench.metrics import METRICS
 
     results_by_metric = {}
     for metric_name, metric_kwargs in metrics_cfg.items():
@@ -207,13 +207,13 @@ def run_sweep(cfg: dict) -> dict:
     sweep_cfg = cfg.pop("sweep")
     param     = sweep_cfg["param"]
     values    = sweep_cfg["values"]
-    metrics_cfg = _parse_metrics(cfg)
 
     records = []
     for val in values:
         print(f"\n── {param}={val!r} ──")
         point_cfg      = _apply_sweep_value(cfg, param, val)
         compute_kwargs = point_cfg.get("compute_kwargs", {})
+        metrics_cfg    = _parse_metrics(point_cfg)
 
         # Only rebuild category_data when the sweep touches a data field.
         if val == values[0] or param in _DATA_FIELDS:
@@ -273,7 +273,12 @@ def main():
             print(f"{'═' * 60}")
             _run_one(run_cfg, out_path)
     else:
-        _run_one(cfg, Path(args.output))
+        out = Path(args.output)
+        if out.is_dir():
+            stem = Path(cfg.get("data_path", "run")).stem
+            out  = out / f"{stem}_metrics.json"
+            print(f"Output is a directory — writing to {out}")
+        _run_one(cfg, out)
 
 
 if __name__ == "__main__":

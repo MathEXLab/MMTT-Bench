@@ -17,6 +17,7 @@ CAT_COLORS = {
     'correct':              '#1D9E75',  # teal-green
     'incorrect':            '#D85A30',  # red-orange
     'irrelevant':           '#7F8C8D',  # grey
+    'no_text':              '#4A90D9',  # steel blue — time series only baseline
     # incorrect mixtures: bright teal → golden-yellow → amber
     'mixture_25_incorrect': '#2EC49A',  # bright teal   (75% correct, 25% incorrect)
     'mixture_50_incorrect': '#C4B020',  # golden yellow (50 / 50)
@@ -31,6 +32,7 @@ CAT_LABELS = {
     'correct':               'Correct',
     'incorrect':             'Incorrect',
     'irrelevant':            'Irrelevant',
+    'no_text':               'Time series only',
     'mixture_25_incorrect':  r'Mix 25% incorrect',
     'mixture_50_incorrect':  r'Mix 50% incorrect',
     'mixture_75_incorrect':  r'Mix 75% incorrect',
@@ -143,6 +145,37 @@ MODEL_LINESTYLES = {
     'svr':   '-.',
     'gbr':   ':',
     'rf':    (0, (3, 1, 1, 1)),
+}
+
+INFO_LINESTYLES = {
+    'mutual_information': '-',
+    'mine':               ':',
+    'infonce':            '-.',
+    'pid':                '--',
+    'v_information':      (0, (3, 1, 1, 1, 1, 1)),
+    'cca':                (0, (5, 10)),
+}
+
+INFO_COLORS = {
+    'mutual_information': '#1f77b4',  # blue
+    'mine':               '#ff7f0e',  # orange
+    'infonce':            '#2ca02c',  # green
+    'cca':                '#d62728',  # red
+    'v_information':      '#9467bd',  # purple
+    'pid':                '#8c564b',  # brown
+}
+
+# x-axis position for each category: % of correct annotations
+CAT_X_MAP = {
+    'correct':               100,
+    'incorrect':               0,
+    'irrelevant':              0,
+    'mixture_25_incorrect':   75,
+    'mixture_50_incorrect':   50,
+    'mixture_75_incorrect':   25,
+    'mixture_25_irrelevant':  75,
+    'mixture_50_irrelevant':  50,
+    'mixture_75_irrelevant':  25,
 }
 
 def plot_mi_per_category(
@@ -328,7 +361,7 @@ def plot_pmi_by_phase(pmi_results, title="Mean PMI by phase and text category",
 
     plt.tight_layout()
     if savepath:
-        plt.savefig(savepath, dpi=150, bbox_inches="tight", facecolor="white")
+        plt.savefig(savepath, dpi=300, bbox_inches="tight", facecolor="white")
     plt.show()
 
 
@@ -408,6 +441,8 @@ def plot_correlation_trends(
     perf_metric:  str = "delta_r2",
     title:        str = "Correlation Trend: Information vs Model Performance",
     save_path=None,
+    show_ts_only:    bool = True,
+    show_error_bars: bool = True,
 ) -> None:
     """
     Per info-metric panel: category-coloured scatter points + linear trend line
@@ -431,30 +466,39 @@ def plot_correlation_trends(
         for model_name, df in tables.items():
             if info_m not in df.columns or perf_metric not in df.columns:
                 continue
-            xs, ys, valid_cats = [], [], []
+            std_col = f'{info_m}_std'
+            xs, ys, x_stds, valid_cats = [], [], [], []
             for cat in df.index:
                 x_val = df.loc[cat, info_m]
                 y_val = df.loc[cat, perf_metric]
                 if np.isnan(x_val) or np.isnan(y_val):
                     continue
                 xs.append(x_val); ys.append(y_val); valid_cats.append(cat)
+                x_stds.append(df.loc[cat, std_col] if std_col in df.columns else np.nan)
             if len(xs) < 2:
                 continue
 
-            xs = np.array(xs); ys = np.array(ys)
+            xs = np.array(xs); ys = np.array(ys); x_stds = np.array(x_stds)
 
             # Drop any remaining non-finite values (can appear after array conversion)
             finite = np.isfinite(xs) & np.isfinite(ys)
-            xs, ys, valid_cats = xs[finite], ys[finite], [c for c, ok in zip(valid_cats, finite) if ok]
+            xs      = xs[finite]
+            ys      = ys[finite]
+            x_stds  = x_stds[finite]
+            valid_cats = [c for c, ok in zip(valid_cats, finite) if ok]
             if len(xs) < 2:
                 continue
 
             all_ys_global.extend(ys.tolist())
 
             for i, cat in enumerate(valid_cats):
+                color = CAT_COLORS.get(cat, "#888")
                 ax.scatter(xs[i], ys[i], facecolors='none',
-                           edgecolors=CAT_COLORS.get(cat, "#888"),
+                           edgecolors=color,
                            zorder=4, s=150, marker=MODEL_MARKERS.get(model_name, 'o'))
+                if show_error_bars and np.isfinite(x_stds[i]):
+                    ax.errorbar(xs[i], ys[i], xerr=x_stds[i], fmt='none',
+                                ecolor=color, elinewidth=1.2, capsize=3, zorder=3)
 
             # Skip trend line if xs has no variance (polyfit is undefined)
             if xs.max() == xs.min():
@@ -485,6 +529,20 @@ def plot_correlation_trends(
         for ax in drawn_axes:
             ax.set_ylim(min(all_ys_global) - pad, max(all_ys_global) + pad)
 
+    # Time-series-only baseline: scatter point at x=0 per model, per panel
+    if show_ts_only:
+        for model_name, df in tables.items():
+            if 'no_text' not in df.index:
+                continue
+            y_ts = df.loc['no_text', perf_metric]
+            if not np.isfinite(y_ts):
+                continue
+            for ax in drawn_axes:
+                ax.scatter(0, y_ts, facecolors='none',
+                           edgecolors=CAT_COLORS['no_text'],
+                           zorder=4, s=150,
+                           marker=MODEL_MARKERS.get(model_name, 'o'))
+
     model_legend = [
         Line2D([0], [0], color='black',
                linestyle=MODEL_LINESTYLES.get(m, '-'),
@@ -498,13 +556,19 @@ def plot_correlation_trends(
                markeredgecolor=CAT_COLORS[cat], linestyle='None',
                markersize=9, label=CAT_LABELS.get(cat, cat))
         for cat in CAT_COLORS
-        if any(cat in df.index for df in tables.values())
+        if cat != 'no_text' and any(cat in df.index for df in tables.values())
     ]
+    if show_ts_only and any('no_text' in df.index for df in tables.values()):
+        cat_legend.append(
+            Line2D([0], [0], marker='o', markerfacecolor='white',
+                   markeredgecolor=CAT_COLORS['no_text'], linestyle='None',
+                   markersize=9, label=CAT_LABELS['no_text'])
+        )
     fig.legend(handles=model_legend, loc='outside lower center',
-               bbox_to_anchor=(0.35, -0.12), ncol=len(tables),
+               bbox_to_anchor=(0.35, -0.15), ncol=len(tables), handlelength=3,
                title='Model (trend line style) with baseline R²')
     fig.legend(handles=cat_legend, loc='outside lower center',
-               bbox_to_anchor=(0.85, -0.12), ncol=1, title='Category (point colour)')
+               bbox_to_anchor=(0.85, -0.15), ncol=1, title='Category (point colour)')
     plt.tight_layout()
     _save_or_show(save_path)
 
@@ -553,13 +617,161 @@ def plot_delta_bars(
     _save_or_show(save_path)
 
 
+def plot_model_mixture(
+    tables:          dict,
+    info_metrics:    list[str],
+    categories:      list[str],
+    perf_metric:     str  = "delta_r2",
+    title:           str  = "",
+    save_path=None,
+    show_error_bars: bool = True,
+) -> None:
+    """
+    2×2 grid showing how performance and information metrics degrade as
+    annotation quality drops from 100% correct toward 0%.
+
+    Layout
+    ------
+    Row 0 — model performance (perf_metric) vs % correct, one column per
+            degradation type (incorrect / irrelevant).
+    Row 1 — information metrics vs % correct, same column layout.
+            Info metric values are model-independent so only one series per
+            metric family is drawn, distinguished by line style.
+    """
+    if not tables:
+        return
+
+    subcats = ["incorrect", "irrelevant"]
+
+    def _ymean(df, col, cat):
+        v = df.loc[cat, col]
+        return float(np.mean(v)) if isinstance(v, (list, np.ndarray)) else float(v)
+
+    def _ystd(df, col, cat):
+        std_col = f"{col}_std"
+        if std_col in df.columns:
+            v = df.loc[cat, std_col]
+            return float(v) if np.isfinite(float(v)) else 0.0
+        v = df.loc[cat, col]
+        return float(np.std(v)) if isinstance(v, (list, np.ndarray)) and len(v) > 1 else 0.0
+
+    def _draw_series(ax, df, metric, subcat, marker, color, linestyle, line_color="black"):
+        mix_cats = sorted(
+            [c for c in categories if subcat in c and c in CAT_X_MAP],
+            key=lambda c: CAT_X_MAP[c],
+        )
+        # Collect all finite (x, y_mean, y_std, point_color) tuples
+        pts = []
+        for cat in mix_cats + ["correct"]:
+            if cat not in df.index or cat not in CAT_X_MAP:
+                continue
+            y = _ymean(df, metric, cat)
+            if not np.isfinite(y):
+                continue
+            pts.append((CAT_X_MAP[cat], y, _ystd(df, metric, cat),
+                        CAT_COLORS["correct"] if cat == "correct" else color))
+        if not pts:
+            return
+        pts.sort()
+        xs    = [p[0] for p in pts]
+        ys    = np.array([p[1] for p in pts])
+        stds  = np.array([p[2] for p in pts])
+
+        # Shaded band
+        if show_error_bars and stds.any():
+            ax.fill_between(xs, ys - stds, ys + stds,
+                            alpha=0.15, color=color, zorder=2)
+        # Scatter points
+        for x, y, _, pt_color in pts:
+            ax.scatter(x, y, facecolors="none", edgecolors=pt_color,
+                       zorder=4, s=150, marker=marker)
+        # Connecting line
+        if len(pts) >= 2:
+            ax.plot(xs, ys, color=line_color, alpha=0.6, lw=1.5,
+                    linestyle=linestyle, zorder=3)
+
+    fig, axes = plt.subplots(2, 2, figsize=(10.0, 10.0), squeeze=False)
+    fig.patch.set_facecolor("white")
+
+    # ── Row 0: model performance ───────────────────────────────────────────
+    for col, subcat in enumerate(subcats):
+        ax = axes[0][col]
+        for model_name, df in tables.items():
+            if perf_metric not in df.columns:
+                continue
+            _draw_series(ax, df, perf_metric, subcat,
+                         marker=MODEL_MARKERS.get(model_name, "o"),
+                         color='black',#CAT_COLORS.get(subcat, "#888"),
+                         linestyle=MODEL_LINESTYLES.get(model_name, "-"))
+        ax.axhline(0, color="#aaa", lw=0.8, ls="--")
+        ax.set_title(f"Replacing with {subcat.capitalize()} Annotations", pad=6)
+        ax.set_xlabel(r"% of Correct Annotations")
+        ax.set_ylabel(PERF_METRIC_LABEL.get(perf_metric, perf_metric))
+        ax.grid(lw=0.4, alpha=0.4)
+        for sp in ["top", "right"]:
+            ax.spines[sp].set_visible(False)
+
+    # ── Row 1: information metrics (model-independent) ─────────────────────
+    ref_df = next(iter(tables.values()))
+    for col, subcat in enumerate(subcats):
+        ax = axes[1][col]
+        for info_m in info_metrics:
+            if info_m not in ref_df.columns:
+                continue
+            ic = INFO_COLORS.get(info_m, "#888")
+            _draw_series(ax, ref_df, info_m, subcat,
+                         marker="o",
+                         color=ic,
+                         linestyle="-",
+                         line_color=ic)
+        ax.axhline(0, color="#aaa", lw=0.8, ls="--")
+        ax.set_xlabel(r"% of Correct Annotations")
+        ax.set_ylabel("Information metric value")
+        ax.grid(lw=0.4, alpha=0.4)
+        for sp in ["top", "right"]:
+            ax.spines[sp].set_visible(False)
+
+    # ── Legends ────────────────────────────────────────────────────────────
+    model_legend = [
+        Line2D([0], [0], marker=MODEL_MARKERS.get(m, "o"), color="black",
+               markerfacecolor="w", markersize=9, lw=1.5,
+               linestyle=MODEL_LINESTYLES.get(m, "-"), label=m)
+        for m in tables
+    ]
+    metric_legend = [
+        Line2D([0], [0], color=INFO_COLORS.get(m, "#888"), lw=1.5,
+               linestyle="-",
+               label=METRIC_DISPLAY.get(m, m))
+        for m in info_metrics
+    ]
+    # cat_legend = [
+    #     Line2D([0], [0], marker='o', markerfacecolor='white',
+    #            markeredgecolor=CAT_COLORS[cat], linestyle='None',
+    #            markersize=9, label=CAT_LABELS.get(cat, cat))
+    #     for cat in ["correct", "incorrect", "irrelevant"]
+    # ]
+
+    # fig.legend(handles=cat_legend, loc='outside lower center',
+    #            bbox_to_anchor=(0.35, -0.12), ncol=1, title='Category')
+    
+
+    fig.legend(handles=model_legend, loc="outside lower left", handlelength=3,
+               bbox_to_anchor=(0.0, -0.12), ncol=3, title="Model")
+    fig.legend(handles=metric_legend, loc="outside lower right",
+               bbox_to_anchor=(1.0, -0.12), ncol=len(info_metrics)/2, title="Info metric")
+    # if title:
+    #     fig.suptitle(title, y=1.01)
+    plt.tight_layout()
+    _save_or_show(save_path)
+
+
 # ---------------------------------------------------------------------------
 # Internal helper
 # ---------------------------------------------------------------------------
 
 def _save_or_show(path: str | None) -> None:
     if path:
-        plt.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.savefig(path, dpi=300, bbox_inches='tight', facecolor='white')
         print(f"Saved → {path}")
         plt.close()
     else:

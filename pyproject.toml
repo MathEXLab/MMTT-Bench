@@ -130,7 +130,6 @@ dependencies = [
     "typing-inspection==0.4.2",
     "urllib3==2.6.3",
     "wadler-lindig==0.1.7",
-    "wandb==0.26.0",
     "wcwidth==0.6.0",
     "yarl==1.23.0",
 ]

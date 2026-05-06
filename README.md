@@ -82,7 +82,7 @@ The full experimental pipeline proceeds in six steps. Steps 1–3 establish the 
 All data generation scripts must be run from the `data_generation/` directory because they import local template modules.
 
 ```bash
-cd src/benchmark/data_generation
+cd src/mmtt_bench/data_generation
 python sine_generator.py --output-dir ../../../benchmark_splits
 ```
 
@@ -170,7 +170,7 @@ Mixture categories linearly interpolate between `correct` and a contaminating ca
 **Generate mixture splits:**
 
 ```bash
-cd src/benchmark/data_generation
+cd src/mmtt_bench/data_generation
 python mixture.py \
     --source     ../../../benchmark_splits_sinehalf \
     --output-dir ../../../benchmark_splits_sinehalf_mixtures
@@ -249,7 +249,7 @@ TimeMMD provides real-world time series paired with news and search text across 
 **Generate benchmark splits:**
 
 ```bash
-python src/benchmark/data_generation/timemmd.py \
+python src/mmtt_bench/data_generation/timemmd.py \
     --input-dir  timemmd_dataset/ \
     --output-dir timemmd_splits/
 ```
@@ -365,7 +365,7 @@ Each split file is a JSON with the following structure:
 
 ### New signal types
 
-Add a generator to `src/benchmark/data_generation/` following the pattern in `sine_generator.py`. Register the signal function and its analytical derivative in the `SIGNAL_FUNCTIONS` and `SIGNAL_DERIVATIVES` dicts, then add a corresponding config to `final_configs/`.
+Add a generator to `src/mmtt_bench/data_generation/` following the pattern in `sine_generator.py`. Register the signal function and its analytical derivative in the `SIGNAL_FUNCTIONS` and `SIGNAL_DERIVATIVES` dicts, then add a corresponding config to `final_configs/`.
 
 ### New text embedding models
 
@@ -382,7 +382,7 @@ sweep:
 
 ### New metrics
 
-Add a class to `src/benchmark/metrics.py` implementing `.compute(category_data, pca_dim, rng, pca_text, **kwargs) -> dict`, register it in the `METRICS` dict, and include it in the `metrics:` block of any config. The result dict must follow the same key convention as `MutualInformationMetric` — see the module docstring for the expected structure.
+Add a class to `src/mmtt_bench/metrics.py` implementing `.compute(category_data, pca_dim, rng, pca_text, **kwargs) -> dict`, register it in the `METRICS` dict, and include it in the `metrics:` block of any config. The result dict must follow the same key convention as `MutualInformationMetric` — see the module docstring for the expected structure.
 
 ---
 
