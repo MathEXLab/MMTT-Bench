@@ -356,6 +356,14 @@ def main() -> None:
             model.fit(X_tr_s, y_tr)
             y_pred = model.predict(X_val_s)
 
+            # get feature importance for tree-based models
+            if model_key in ['rf', 'gbr'] and input_config is not None:
+                # After fitting GBR on X_joint
+                importances = model.feature_importances_
+                ts_importance = importances[:ts_dim].sum()
+                text_importance = importances[ts_dim:].sum()
+                print(f"\n    feature importance — TS: {ts_importance:.3f}  Text: {text_importance:.3f}")
+
             overall = _regression_metrics(y_val, y_pred)
             print(f'R²={overall["r2"]:.3f}  RMSE={overall["rmse"]:.4f}')
 

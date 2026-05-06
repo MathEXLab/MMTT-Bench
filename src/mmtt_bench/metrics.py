@@ -166,28 +166,34 @@ class MutualInformationMetric:
     """
     KSG mutual information at four levels per annotation category.
 
-    Pools annotation points across all categories before the category loop,
-    uses a shared pooled ts baseline for the conditional term, bootstrap
-    resamples rows with replacement, and computes mean/std after the
-    bootstrap loop.
+    The point estimate uses the full dataset. Variance is estimated via the
+    Holmes & Nemenman (2019) subsampling method: KSG variance scales as 1/N,
+    so we compute empirical variance at two subsample sizes (N/2 and N/4)
+    without replacement, estimate the constant C in Var = C/N from each, and
+    extrapolate back to the full N.  This avoids bootstrap bias (bootstrapping
+    inflates KSG variance because resampled datasets share ~63% of their
+    points).
 
     Parameters
     ----------
-    n_neighbours : KSG k
-    n_bootstrap  : bootstrap resamples
-    seed         : rng seed — pass rng externally to reuse the same
-                   Generator across multiple pca_dim values
+    n_neighbours     : KSG k
+    n_subsample_reps : draws per subsample size for variance estimation
+    seed             : rng seed
     """
 
+    # Subsample fractions used for variance extrapolation
+    _SUBSAMPLE_FRACS = [0.5, 0.25]
+
     def __init__(self,
-                 n_neighbours: int = 3,
-                 n_bootstrap: int = 20,
-                 seed: int = 42,
-                **_kwargs,
+                 n_neighbours:     int = 3,
+                 n_subsample_reps: int = 20,
+                 seed:             int = 42,
+                 **_kwargs,
                  ):
-        self.n_neighbours = n_neighbours
-        self.n_bootstrap  = n_bootstrap
-        self.seed         = seed
+        self.n_neighbours     = n_neighbours
+        self.n_subsample_reps = n_subsample_reps
+        self.seed             = seed
+
     def compute(
         self,
         category_data: dict,
@@ -197,24 +203,21 @@ class MutualInformationMetric:
         **_kwargs,
     ) -> dict:
         """
-        Compute bootstrapped MI per category.
+        Compute KSG MI per category with subsampling-based variance estimation.
 
         Parameters
         ----------
         category_data : {cat: {'ts': ndarray, 'y': ndarray, 'x': ndarray}}
         pca_dim       : number of PCA dims for text embeddings
-        rng           : numpy Generator — if None, creates one with self.seed.
-                        Pass the same rng instance across pca_dim values to
-                        keep bootstrap resamples comparable.
-        pca_text      : pre-fitted PCA — if None, fits on pooled x.
-                        Pass a fitted PCA to reuse the same embedding space
-                        across pca_dim values.
+        rng           : numpy Generator (created from seed if None)
+        pca_text      : pre-fitted PCA (fitted on pooled x if None)
 
         Returns
         -------
-        Results dict with keys: text, ts, joint, conditional (bootstrap lists),
-        <key>_mean, <key>_std, explained_variance, d_conservative, d_liberal
-        — all keyed by category.
+        Results dict with keys: text, ts, joint, conditional (single-element
+        lists containing the full-N estimate), <key>_mean, <key>_std
+        (std extrapolated via 1/N scaling), explained_variance,
+        d_conservative, d_liberal — all keyed by category.
         """
         if rng is None:
             rng = np.random.default_rng(self.seed)
@@ -228,14 +231,14 @@ class MutualInformationMetric:
                        + ['explained_variance', 'd_conservative', 'd_liberal'])
         results = {m: {c: [] for c in category_data} for m in all_metrics}
 
-        cumvar         = np.cumsum(pca_text.explained_variance_ratio_)
+        cumvar = np.cumsum(pca_text.explained_variance_ratio_)
 
         for cat, vals in category_data.items():
             x_pooled, X_ts, Y = pooled[cat]
-
-            X_text = pca_text.transform(x_pooled)[:, :pca_dim]
+            X_text  = pca_text.transform(x_pooled)[:, :pca_dim]
             X_joint = np.hstack([X_ts, X_text])
             N       = len(Y)
+
             d_conservative = int(np.sqrt(N / 2))
             d_liberal      = N // 5
             if pca_dim > d_liberal:
@@ -243,26 +246,45 @@ class MutualInformationMetric:
                     f"pca_dim={pca_dim} > liberal bound d={d_liberal} "
                     f"(N={N}). MI estimates may be unreliable. "
                     "Consider reducing pca_dim.",
-                    UserWarning
+                    UserWarning,
                 )
 
+            # ── Point estimates on full dataset ───────────────────────────
+            mi_text_full  = ksg_mi(X_text,  Y, self.n_neighbours)
+            mi_ts_full    = ksg_mi(X_ts,    Y, self.n_neighbours)
+            mi_joint_full = ksg_mi(X_joint, Y, self.n_neighbours)
 
-            for _ in range(self.n_bootstrap):
-                idx    = rng.choice(N, size=N, replace=True)
-                y_boot = Y[idx]
+            results['text'][cat]        = [mi_text_full]
+            results['ts'][cat]          = [mi_ts_full]
+            results['joint'][cat]       = [mi_joint_full]
+            results['conditional'][cat] = [mi_joint_full - mi_ts_full]
 
-                mi_text  = ksg_mi(X_text[idx],  y_boot, self.n_neighbours)
-                mi_ts    = ksg_mi(X_ts[idx],    y_boot, self.n_neighbours)
-                mi_joint = ksg_mi(X_joint[idx], y_boot, self.n_neighbours)
+            # ── Variance via Holmes & Nemenman 1/N subsampling ────────────
+            # Var(MI, n) = C/n. Estimate C at each subsample size, average.
+            C_estimates: dict[str, list] = {m: [] for m in metrics}
 
-                results['text'][cat].append(mi_text)
-                results['ts'][cat].append(mi_ts)
-                results['joint'][cat].append(mi_joint)
-                results['conditional'][cat].append(mi_joint - mi_ts)
+            for frac in self._SUBSAMPLE_FRACS:
+                sub_n = max(self.n_neighbours + 2, int(N * frac))
+                if sub_n >= N:
+                    continue
+                sub_vals: dict[str, list] = {m: [] for m in metrics}
+                for _ in range(self.n_subsample_reps):
+                    idx   = rng.choice(N, size=sub_n, replace=False)
+                    mi_t  = ksg_mi(X_text[idx],  Y[idx], self.n_neighbours)
+                    mi_s  = ksg_mi(X_ts[idx],    Y[idx], self.n_neighbours)
+                    mi_j  = ksg_mi(X_joint[idx], Y[idx], self.n_neighbours)
+                    sub_vals['text'].append(mi_t)
+                    sub_vals['ts'].append(mi_s)
+                    sub_vals['joint'].append(mi_j)
+                    sub_vals['conditional'].append(mi_j - mi_s)
+                for m in metrics:
+                    var_sub = float(np.var(sub_vals[m]))
+                    C_estimates[m].append(var_sub * sub_n)
 
             for m in metrics:
-                results[f"{m}_mean"][cat] = float(np.mean(results[m][cat]))
-                results[f"{m}_std"][cat]  = float(np.std(results[m][cat]))
+                results[f"{m}_mean"][cat] = float(results[m][cat][0])
+                C = float(np.mean(C_estimates[m])) if C_estimates[m] else 0.0
+                results[f"{m}_std"][cat]  = float(np.sqrt(max(C / N, 0.0)))
 
             results['explained_variance'][cat] = float(
                 cumvar[min(pca_dim - 1, len(cumvar) - 1)]

@@ -29,15 +29,15 @@ train.py                            # Train and evaluate regression models → J
 plot.py                             # Visualise metrics and compare metrics vs models
 final_configs/                      # YAML configs for each experiment (best parameters)
 src/
-  benchmark/
+  mmtt-bench/
     data.py                         # Data loading and preprocessing pipeline
     metrics.py                      # Metric implementations (KSG, PID, V-info, …)
     tokenizers.py                   # Text and time-series tokenizers
     viz.py                          # Shared plotting functions
     data_generation/
-      sine_generator.py             # Generate synthetic sine-wave benchmark splits
+      sine_generator.py             # Generate synthetic mmtt-bench splits
       mixture.py                    # Augment splits with mixture annotation categories
-      timemmd.py                    # Convert TimeMMD CSV dataset to benchmark format
+      timemmd.py                    # Convert TimeMMD CSV dataset to mmtt-bench format
 datasets/benchmark_splits*/                  # Generated dataset splits (train / val / test JSON)
 results/                            # Experiment outputs (JSON, CSV, plots)
 ```
@@ -62,7 +62,7 @@ Optional dependencies for neural MI estimators:
 
 ```bash
 # MINE
-git clone https://github.com/MasanoriYamada/mine-pytorch mine-pytorch
+git clone https://github.com/gtegner/mine-pytorch mine-pytorch
 
 # PID
 pip install cvxpy
@@ -82,7 +82,7 @@ The full experimental pipeline proceeds in six steps. Steps 1–3 establish the 
 All data generation scripts must be run from the `data_generation/` directory because they import local template modules.
 
 ```bash
-cd src/mmtt_bench/data_generation
+cd src/mmtt-bench/data_generation
 python sine_generator.py --output-dir ../../../benchmark_splits
 ```
 
@@ -170,7 +170,7 @@ Mixture categories linearly interpolate between `correct` and a contaminating ca
 **Generate mixture splits:**
 
 ```bash
-cd src/mmtt_bench/data_generation
+cd src/mmtt-bench/data_generation
 python mixture.py \
     --source     ../../../benchmark_splits_sinehalf \
     --output-dir ../../../benchmark_splits_sinehalf_mixtures
@@ -246,15 +246,15 @@ TimeMMD provides real-world time series paired with news and search text across 
 
 **Obtain the raw data** from the [TimeMMD repository](https://github.com/AdityaLab/MM-TSFlib) and place the CSVs in a local directory (e.g. `timemmd_dataset/`).
 
-**Generate benchmark splits:**
+**Generate MMTT-Bench splits:**
 
 ```bash
-python src/mmtt_bench/data_generation/timemmd.py \
+python src/mmtt-bench/data_generation/timemmd.py \
     --input-dir  timemmd_dataset/ \
     --output-dir timemmd_splits/
 ```
 
-Each CSV (e.g. `agriculture.csv`) produces two JSON files: `agriculture_train.json` and `agriculture_val.json`. Datasets with fewer than 400 training rows are skipped with a warning. The `--seed` flag controls the RNG used to sample irrelevant text from other domains (default: 42).
+Each CSV (e.g. `energy.csv`) produces two JSON files: `train.json` and `val.json`. The `--seed` flag controls the RNG used to sample irrelevant text from other domains (default: 42).
 
 **Run metrics and models:**
 
@@ -286,7 +286,7 @@ python plot.py \
 Use a `sweep:` block in any config to vary one parameter across all metrics in a single run:
 
 ```yaml
-data_path:      benchmark_splits_sinehalf/train.json
+data_path:      mmtt_bench_splits/train.json
 model_name:     sentence-transformers/all-distilroberta-v1
 ts_tokenizer:   identity
 lookback_steps: 2
@@ -297,9 +297,31 @@ compute_kwargs:
   n_bootstrap: 20
 
 metrics:
-  cca: {}
+  mutual_information:
+    n_neighbours: 3
+    n_bootstrap:  20
+  mine:
+     mine_iters: 500
+     n_bootstrap: 20
+     mine_batch_size: 128
+     lr: 0.0001
+  infonce:
+     n_bootstrap: 20   # point estimate — training is slow
+     hidden_dim:  128
+     n_iters:     500
+     batch_size:  64      # ceiling on MI = log(64) ≈ 4.2 nats
+     lr:          0.001
+  cca:
+    n_bootstrap: 20    # same as KSG for fair variance comparison
+    eps: 1e-5   
   v_information:
-    n_bootstrap: 20
+    cv: 5
+    n_bootstrap:  20
+  pid:
+    n_clusters_ts:   4
+    n_clusters_text: 16
+    n_bins_y:        4
+    n_bootstrap:  20
 
 sweep:
   param:  pca_dim
@@ -365,7 +387,7 @@ Each split file is a JSON with the following structure:
 
 ### New signal types
 
-Add a generator to `src/mmtt_bench/data_generation/` following the pattern in `sine_generator.py`. Register the signal function and its analytical derivative in the `SIGNAL_FUNCTIONS` and `SIGNAL_DERIVATIVES` dicts, then add a corresponding config to `final_configs/`.
+Add a generator to `src/mmtt-bench/data_generation/` following the pattern in `sine_generator.py`. Register the signal function and its analytical derivative in the `SIGNAL_FUNCTIONS` and `SIGNAL_DERIVATIVES` dicts, then add a corresponding config to `final_configs/`.
 
 ### New text embedding models
 
@@ -382,10 +404,10 @@ sweep:
 
 ### New metrics
 
-Add a class to `src/mmtt_bench/metrics.py` implementing `.compute(category_data, pca_dim, rng, pca_text, **kwargs) -> dict`, register it in the `METRICS` dict, and include it in the `metrics:` block of any config. The result dict must follow the same key convention as `MutualInformationMetric` — see the module docstring for the expected structure.
+Add a class to `src/mmtt-bench/metrics.py` implementing `.compute(category_data, pca_dim, rng, pca_text, **kwargs) -> dict`, register it in the `METRICS` dict, and include it in the `metrics:` block of any config. The result dict must follow the same key convention as `MutualInformationMetric` — see the module docstring for the expected structure.
 
 ---
-
+<!-- 
 ## Citation
 
 ```bibtex
@@ -395,7 +417,7 @@ Add a class to `src/mmtt_bench/metrics.py` implementing `.compute(category_data,
   journal = {},
   year    = {2025},
 }
-```
+``` -->
 
 ---
 

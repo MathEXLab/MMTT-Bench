@@ -181,7 +181,13 @@ def build_eval_table(
                 v = results[ckey].get(cat, np.nan)
                 if isinstance(v, (list, np.ndarray)) and len(v):
                     col_vals.append(float(np.mean(v)))
-                    std_vals.append(float(np.std(v)))
+                    # Prefer pre-computed _std (e.g. KSG subsampling extrapolation)
+                    # over np.std of the list when available.
+                    precomputed_std = results.get(f"{ckey}_std", {}).get(cat)
+                    if precomputed_std is not None and np.isfinite(precomputed_std):
+                        std_vals.append(float(precomputed_std))
+                    else:
+                        std_vals.append(float(np.std(v)))
                 else:
                     col_vals.append(float(v) if not isinstance(v, (list, np.ndarray)) else np.nan)
                     std_vals.append(np.nan)
