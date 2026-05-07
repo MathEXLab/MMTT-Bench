@@ -1,0 +1,53 @@
+# Example config for run.py
+# Run with: python run.py example_config.yaml --output results/my_run.json
+
+data_path:      datasets/benchmark_splits/train.json
+embedding_type: sentence_transformer
+model_name:     sentence-transformers/all-distilroberta-v1
+ts_tokenizer:   identity
+horizon_steps:  1
+lookback_steps: 2
+patch_len:      1
+stride:         1
+
+# compute_kwargs are passed to every metric's .compute() call.
+# pca_dim applies to both MI and PID.
+compute_kwargs:
+  pca_dim: 16 # is PID stable or breaking down from 8?
+  n_bootstrap:  1
+  strategy: discrete
+
+# One or more metrics. Each entry maps metric name → its __init__ kwargs.
+# category_data is built once and shared across all metrics.
+
+metrics:
+  mutual_information:
+    n_neighbours: 3
+    n_subsample_reps:  20
+  mine:
+    mine_iters: 500
+    n_bootstrap: 1
+    mine_batch_size: 64
+  infonce:
+    n_bootstrap: 1   
+    hidden_dim:  128
+    n_iters:     500
+    batch_size:  64      # ceiling on MI = log(64) ≈ 4.2 nats
+    lr:          0.001
+  cca:
+    n_bootstrap: 1   # same as KSG for fair variance comparison
+    eps: 1e-5   
+  v_information:
+    cv: 5
+    n_bootstrap:  1
+  pid:
+    n_clusters_ts:   4
+    n_clusters_text: 5
+    n_bins_y:        4
+
+# Optional sweep block. param can be a top-level field (e.g. model_name,
+# ts_tokenizer) or a key inside compute_kwargs (e.g. pca_dim).
+# # category_data is only rebuilt when the swept param affects data loading.
+sweep:
+  param: pca_dim
+  values: [4,8,16,32,64]
