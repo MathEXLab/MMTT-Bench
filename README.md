@@ -21,29 +21,6 @@ A correctly calibrated result shows *correct* scoring highest on both axes, *irr
 
 ---
 
-## Repository structure
-
-```
-run.py                              # Compute information-theoretic metrics → JSON
-train.py                            # Train and evaluate regression models → JSON
-plot.py                             # Visualise metrics and compare metrics vs models
-final_configs/                      # YAML configs for each experiment (best parameters)
-src/
-  mmtt-bench/
-    data.py                         # Data loading and preprocessing pipeline
-    metrics.py                      # Metric implementations (KSG, PID, V-info, …)
-    tokenizers.py                   # Text and time-series tokenizers
-    viz.py                          # Shared plotting functions
-    data_generation/
-      sine_generator.py             # Generate synthetic mmtt-bench splits
-      mixture.py                    # Augment splits with mixture annotation categories
-      timemmd.py                    # Convert TimeMMD CSV dataset to mmtt-bench format
-datasets/benchmark_splits*/                  # Generated dataset splits (train / val / test JSON)
-results/                            # Experiment outputs (JSON, CSV, plots)
-```
-
----
-
 ## Installation
 
 **Prerequisites:** [uv](https://docs.astral.sh/uv/getting-started/installation/) and Python 3.13.
@@ -52,10 +29,9 @@ results/                            # Experiment outputs (JSON, CSV, plots)
 # 1. Install all pinned dependencies from the lock file
 uv sync
 
-# 2. Install PyTorch into the uv-managed environment (requires CUDA 12.8)
-uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+# 2. Install PyTorch into the uv-managed environment
+uv pip install torch torchvision 
 ```
-
 For a different CUDA version or CPU-only, see [pytorch.org/get-started](https://pytorch.org/get-started/locally/) for the right `--index-url`. The `uv.lock` file pins every other dependency exactly, so `uv sync` always produces an identical environment.
 
 Optional dependencies for neural MI estimators:
@@ -70,6 +46,41 @@ git clone https://github.com/pliang279/PID PID
 ```
 
 ---
+
+## Quickstart: Reproduce Experimental Results
+
+The commands below reproduce the two primary datasets from the paper (synthetic sine-wave and real-world TimeMMD) and generate the plots.
+
+**1. Run metrics and train regressors**
+
+```bash
+./run_finals.sh sine timemmd
+```
+
+This runs the full pipeline for both datasets and writes results to `results/final/`.
+
+**2. Plot results**
+
+```bash
+# Sine wave
+python plot.py \
+    --metrics results/final/sine_metrics.json \
+    --models  results/final/sine_model.json \
+    --output-dir results/plots/sine/ \
+    --perf-metric r2
+
+# TimeMMD
+python plot.py \
+    --metrics results/final/timemmd_metrics.json \
+    --models  results/final/timemmd_model.json \
+    --output-dir results/plots/timemmd/ \
+    --perf-metric r2
+```
+
+**Plots that appear in the paper** are the correlation trend plots (`*_correlation_trends_r2.png`), which show how each information metric correlates with model R² across annotation categories.
+
+---
+
 
 ## Experiment workflow
 
@@ -172,8 +183,8 @@ Mixture categories linearly interpolate between `correct` and a contaminating ca
 ```bash
 cd src/mmtt-bench/data_generation
 python mixture.py \
-    --source     ../../../benchmark_splits_sinehalf \
-    --output-dir ../../../benchmark_splits_sinehalf_mixtures
+    --source     ../../../benchmark_splits \
+    --output-dir ../../../benchmark_splits_mixtures
 ```
 
 This adds six new categories to the split — `mixture_25_incorrect`, `mixture_50_incorrect`, `mixture_75_incorrect`, and the corresponding `irrelevant` variants — where the number indicates the contamination percentage. The original three categories are preserved unchanged.
@@ -182,8 +193,8 @@ Default contamination levels (25%, 50%, 75%) and types (`incorrect`, `irrelevant
 
 ```bash
 python mixture.py \
-    --source     ../../../benchmark_splits_sinehalf \
-    --output-dir ../../../benchmark_splits_sinehalf_mixtures \
+    --source     ../../../benchmark_splits \
+    --output-dir ../../../benchmark_splits_mixtures \
     --levels 10 25 50 75 90 \
     --types  incorrect irrelevant \
     --seed   42
@@ -286,7 +297,7 @@ python plot.py \
 Use a `sweep:` block in any config to vary one parameter across all metrics in a single run:
 
 ```yaml
-data_path:      mmtt_bench_splits/train.json
+data_path:      datasets/benchmark_splits/train.json
 model_name:     sentence-transformers/all-distilroberta-v1
 ts_tokenizer:   identity
 lookback_steps: 2
@@ -294,23 +305,24 @@ patch_len:      1
 stride:         1
 
 compute_kwargs:
-  n_bootstrap: 20
+  pca_dim:      16
+  n_bootstrap:  20
+  strategy: discrete
 
 metrics:
   mutual_information:
-    n_neighbours: 3
-    n_bootstrap:  20
+    n_neighbours: 1
+    n_subsample_reps:  20
   mine:
-     mine_iters: 500
-     n_bootstrap: 20
-     mine_batch_size: 128
-     lr: 0.0001
+    mine_iters: 500
+    n_bootstrap: 20
+    lr: 0.0001
   infonce:
-     n_bootstrap: 20   # point estimate — training is slow
-     hidden_dim:  128
-     n_iters:     500
-     batch_size:  64      # ceiling on MI = log(64) ≈ 4.2 nats
-     lr:          0.001
+    n_bootstrap: 20    # point estimate — training is slow
+    hidden_dim:  128
+    n_iters:     500
+    batch_size:  64      # ceiling on MI = log(64) ≈ 4.2 nats
+    lr:          0.001
   cca:
     n_bootstrap: 20    # same as KSG for fair variance comparison
     eps: 1e-5   
@@ -319,7 +331,7 @@ metrics:
     n_bootstrap:  20
   pid:
     n_clusters_ts:   4
-    n_clusters_text: 16
+    n_clusters_text: 5
     n_bins_y:        4
     n_bootstrap:  20
 
@@ -339,20 +351,87 @@ The `param` field can be any top-level config key, any key inside `compute_kwarg
 
 ## Configuration reference
 
+### Top-level fields
+
 | Field | Default | Description |
 |---|---|---|
 | `data_path` | — | Path to the train split JSON |
 | `embedding_type` | `sentence_transformer` | `sentence_transformer` or `huggingface` |
-| `model_name` | `all-distilroberta-v1` | HuggingFace model identifier |
+| `model_name` | `all-distilroberta-v1` | HuggingFace sentence-transformer model identifier |
 | `ts_tokenizer` | `identity` | `identity`, `patch`, or `patch_mean` |
-| `lookback_steps` | `2` | Past time steps in each lookback window |
-| `horizon_steps` | `1` | Steps ahead to predict |
-| `patch_len` | `1` | Patch length (for `patch` / `patch_mean` tokenizers) |
-| `stride` | `1` | Stride between patches |
-| `compute_kwargs.pca_dim` | `16` | PCA dimensions applied to text embeddings before metric computation |
-| `compute_kwargs.n_bootstrap` | `20` | Bootstrap resampling iterations |
-| `shuffle` | `false` | If true, randomises text–signal alignment as a null baseline |
-| `shuffle_seed` | `42` | RNG seed for shuffling |
+| `lookback_steps` | `2` | Past dense time steps included in each lookback window |
+| `horizon_steps` | `1` | Steps ahead to predict (Y target length) |
+| `patch_len` | `1` | Patch length for `patch` / `patch_mean` tokenizers |
+| `stride` | `1` | Stride between successive patches |
+| `shuffle` | `false` | Randomises text–signal alignment as a null baseline |
+| `shuffle_seed` | `42` | RNG seed for shuffle |
+
+### `compute_kwargs` — passed to every metric's `.compute()` call
+
+| Field | Default | Description |
+|---|---|---|
+| `pca_dim` | `16` | PCA dimensions kept from text embeddings before metric computation |
+| `strategy` | `equal-width` | Y-discretisation strategy for PID: `sign`, `quantile`, `equal-width`, `discrete`, `energy` |
+| `y_channel` | `0` | Column of Y used for PID discretisation (use the horizon step the text describes, e.g. `11` for a 12-step horizon) |
+| `n_bootstrap` | `1` | Bootstrap resamples passed to metrics that use it (does not apply to KSG — use `n_subsample_reps` there) |
+
+### `metrics` — per-metric `__init__` kwargs
+
+**`mutual_information` (KSG)**
+
+| Field | Default | Description |
+|---|---|---|
+| `n_neighbours` | `3` | KSG k-nearest-neighbour count |
+| `n_subsample_reps` | `20` | Draws per subsample size for Holmes & Nemenman variance estimation |
+
+**`mine`**
+
+| Field | Default | Description |
+|---|---|---|
+| `mine_iters` | `500` | Gradient steps per MI estimate |
+| `mine_batch_size` | `256` | Mini-batch size |
+| `lr` | `0.0001` | Adam learning rate |
+| `n_bootstrap` | `1` | Bootstrap resamples (1 = full data, no resampling) |
+
+**`infonce`**
+
+| Field | Default | Description |
+|---|---|---|
+| `n_iters` | `500` | Gradient steps per MI estimate |
+| `batch_size` | `64` | Mini-batch size (sets ceiling MI ≈ log(`batch_size`) nats) |
+| `lr` | `0.001` | Adam learning rate |
+| `hidden_dim` | `128` | Hidden layer width of the critic network |
+| `n_bootstrap` | `1` | Bootstrap resamples |
+
+**`cca`**
+
+| Field | Default | Description |
+|---|---|---|
+| `n_bootstrap` | `1` | Bootstrap resamples |
+| `eps` | `1e-5` | Tikhonov regularisation added to covariance matrices |
+
+**`v_information`**
+
+| Field | Default | Description |
+|---|---|---|
+| `cv` | `5` | Cross-validation folds for RidgeCV |
+| `n_bootstrap` | `1` | Bootstrap resamples |
+
+**`pid`**
+
+| Field | Default | Description |
+|---|---|---|
+| `n_clusters_ts` | `4` | KMeans clusters for ts discretisation |
+| `n_clusters_text` | `5` | KMeans clusters for text discretisation |
+| `n_bins_y` | `4` | Y bins (strategy set via `compute_kwargs.strategy`) |
+| `n_bootstrap` | `1` | Bootstrap resamples with fixed KMeans codebook |
+
+### `sweep` block
+
+| Field | Description |
+|---|---|
+| `param` | Parameter to vary — any top-level key, any `compute_kwargs` key, or any key inside a metric's block |
+| `values` | List of values to sweep over |
 
 ---
 
