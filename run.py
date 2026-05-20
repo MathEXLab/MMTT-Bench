@@ -84,7 +84,7 @@ def _serialise_results(results: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 _DATA_FIELDS = {
-    "data_path", "embedding_type", "model_name",
+    "data_path", "embedding_type", "model_name", "device", "llm_batch_size",
     "ts_tokenizer", "horizon_steps", "lookback_steps", "patch_len", "stride",
 }
 
@@ -96,6 +96,8 @@ _DEFAULTS = {
     "lookback_steps": 1,
     "patch_len":      1,
     "stride":         1,
+    "device":         None,
+    "llm_batch_size": 8,
 }
 
 
@@ -114,10 +116,17 @@ def _build_category_data(cfg: dict):
     from src.mmtt_bench.data import build_category_data, load_split, shuffle_text_annotations
     from src.mmtt_bench.tokenizers import TEXT_TOKENIZERS, TS_TOKENIZERS
 
-    raw      = load_split(cfg["data_path"])
-    text_tok = TEXT_TOKENIZERS[cfg.get("embedding_type", "sentence_transformer")](
-        cfg.get("model_name", _DEFAULTS["model_name"])
-    )
+    raw            = load_split(cfg["data_path"])
+    embedding_type = cfg.get("embedding_type", "sentence_transformer")
+    model_name     = cfg.get("model_name", _DEFAULTS["model_name"])
+    if embedding_type == "llm":
+        text_tok = TEXT_TOKENIZERS[embedding_type](
+            model_name,
+            device     = cfg.get("device",         _DEFAULTS["device"]),
+            batch_size = cfg.get("llm_batch_size", _DEFAULTS["llm_batch_size"]),
+        )
+    else:
+        text_tok = TEXT_TOKENIZERS[embedding_type](model_name)
     ts_tok = TS_TOKENIZERS[cfg.get("ts_tokenizer", "identity")](
         patch_len      = cfg.get("patch_len",      _DEFAULTS["patch_len"]),
         stride         = cfg.get("stride",         _DEFAULTS["stride"]),

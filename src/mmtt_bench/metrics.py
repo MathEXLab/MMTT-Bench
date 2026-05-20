@@ -867,6 +867,10 @@ class MINEMetric:
         results = {m: {c: [] for c in category_data} for m in all_metrics}
         cumvar  = np.cumsum(pca_text.explained_variance_ratio_)
 
+        # TIMING (delete when done)
+        import time as _time
+        _mine_times = []
+
         for cat, vals in category_data.items():
             x_pooled, X_ts, Y = pooled[cat]
             X_text  = pca_text.transform(x_pooled)[:, :pca_dim]
@@ -881,9 +885,11 @@ class MINEMetric:
                 idx = (rng.choice(N, size=N, replace=True)
                        if self.n_bootstrap > 1 else np.arange(N))
 
+                _t0 = _time.perf_counter()
                 mi_text  = self._estimate_mi(Mine, X_text[idx],  Y[idx])
                 mi_ts    = self._estimate_mi(Mine, X_ts[idx],    Y[idx])
                 mi_joint = self._estimate_mi(Mine, X_joint[idx], Y[idx])
+                _mine_times.append(_time.perf_counter() - _t0)
 
                 results['text'][cat].append(mi_text)
                 results['ts'][cat].append(mi_ts)
@@ -899,6 +905,11 @@ class MINEMetric:
             )
             results['d_conservative'][cat] = d_conservative
             results['d_liberal'][cat]      = d_liberal
+
+        # TIMING (delete when done)
+        print(f"  [MINE timing] {len(_mine_times)} calls — "
+              f"mean {np.mean(_mine_times):.2f}s  std {np.std(_mine_times):.2f}s  "
+              f"total {sum(_mine_times):.1f}s")
 
         return results
 
@@ -1130,6 +1141,10 @@ class InfoNCEMetric:
         results = {m: {c: [] for c in category_data} for m in all_metrics}
         cumvar  = np.cumsum(pca_text.explained_variance_ratio_)
 
+        # TIMING (delete when done)
+        import time as _time
+        _infonce_times = []
+
         for cat in category_data:
             x_pooled, X_ts, Y = pooled[cat]
             X_text  = pca_text.transform(x_pooled)[:, :pca_dim]
@@ -1166,9 +1181,11 @@ class InfoNCEMetric:
                 # but independent — same pattern as MINE implementation
                 torch_seed = self.seed * 1000 + b
 
+                _t0 = _time.perf_counter()
                 mi_text  = self._estimate_mi(x_text_b,  y_b, torch_seed)
                 mi_ts    = self._estimate_mi(x_ts_b,    y_b, torch_seed + 1)
                 mi_joint = self._estimate_mi(x_joint_b, y_b, torch_seed + 2)
+                _infonce_times.append(_time.perf_counter() - _t0)
 
                 results['text'][cat].append(mi_text)
                 results['ts'][cat].append(mi_ts)
@@ -1184,6 +1201,11 @@ class InfoNCEMetric:
             )
             results['d_conservative'][cat] = d_conservative
             results['d_liberal'][cat]      = d_liberal
+
+        # TIMING (delete when done)
+        print(f"  [InfoNCE timing] {len(_infonce_times)} calls — "
+              f"mean {np.mean(_infonce_times):.2f}s  std {np.std(_infonce_times):.2f}s  "
+              f"total {sum(_infonce_times):.1f}s")
 
         return results
 

@@ -60,6 +60,69 @@ class HuggingFaceTokenizer:
         return out.last_hidden_state[:, 0, :].numpy()
 
 
+class LLMTokenizer:
+    """
+    Mean-pool embeddings from a decoder-only LLM (e.g. GPT-2, Llama-7b/8b).
+
+    Decoder-only models have no CLS token, so this mean-pools the last hidden
+    state over non-padding token positions. The pad token is set to EOS when
+    the model has no dedicated pad token (standard for GPT-2, Llama, etc.).
+
+    Loads lazily on first encode() call. Uses CUDA if available.
+    Texts are encoded in mini-batches to avoid OOM on large models.
+
+    Usage:
+        tok = LLMTokenizer('gpt2')
+        tok = LLMTokenizer('meta-llama/Llama-2-7b-hf', device='cuda', batch_size=4)
+        embeddings = tok.encode(texts)  # (N, hidden_dim)
+    """
+    def __init__(self, model_name: str, device: str | None = None, batch_size: int = 8):
+        self.model_name = model_name
+        self.device     = device   # auto-detected on first _load() if None
+        self.batch_size = batch_size
+        self._tokenizer = None
+        self._model     = None
+
+    def _load(self):
+        if self._model is not None:
+            return
+        import torch
+        from transformers import AutoTokenizer, AutoModel
+
+        self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        # GPT-2, Llama, and most causal models ship without a pad token.
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        self._model = AutoModel.from_pretrained(self.model_name)
+
+        if self.device is None:
+            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self._model = self._model.to(self.device)
+        self._model.eval()
+
+    def _encode_batch(self, texts: list[str]) -> np.ndarray:
+        import torch
+        encoded = self._tokenizer(
+            texts, padding=True, truncation=True, return_tensors='pt'
+        )
+        encoded = {k: v.to(self.device) for k, v in encoded.items()}
+        with torch.no_grad():
+            out = self._model(**encoded)
+        hidden = out.last_hidden_state                             # (B, L, D)
+        mask   = encoded['attention_mask'].unsqueeze(-1).float()  # (B, L, 1)
+        pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1)    # (B, D)
+        return pooled.cpu().numpy()
+
+    def encode(self, texts: list[str]) -> np.ndarray:
+        self._load()
+        batches = [
+            texts[i: i + self.batch_size]
+            for i in range(0, len(texts), self.batch_size)
+        ]
+        return np.concatenate([self._encode_batch(b) for b in batches], axis=0)
+
+
 # ---------------------------------------------------------------------------
 # Registry — maps embedding_type strings to tokenizer classes.
 #
@@ -72,6 +135,7 @@ class HuggingFaceTokenizer:
 TEXT_TOKENIZERS = {
     'sentence_transformer': SentenceTransformerTokenizer,
     'huggingface':          HuggingFaceTokenizer,
+    'llm':                  LLMTokenizer,
 }
 
 def _pad(arr: np.ndarray, target_len: int) -> np.ndarray:
