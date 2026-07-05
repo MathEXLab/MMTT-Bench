@@ -1,0 +1,205 @@
+# timemmd_llm.yaml
+# Config for LLM-backbone forecasting: TimeLLM and GPT4MTS on TimeMMD.
+#
+# Models
+# ──────
+#  TimeLLM : frozen GPT2 backbone; TS patches reprogrammed into LLM token space
+#             via learned cross-attention (ReprogrammingLayer). Trains: patch_embed,
+#             reprogramming layer, output head.
+#  GPT4MTS : frozen GPT2 backbone; patches linearly projected to LLM space;
+#             prompt enriched with per-sample TS statistics. Trains: patch_proj,
+#             output head.
+#
+# Domain prompts
+# ──────────────
+# From Appendix C of "When Does Multimodality Lead to Better Time Series
+# Forecasting?" (TimeMMD paper). The placeholder text below is derived from the
+# domain descriptions in that paper — replace with the exact Appendix C wording
+# if you need strict reproducibility.
+
+# ── LLM backbone ──────────────────────────────────────────────────────────────
+llm_model: GPT2   # GPT2 (d_llm=768) | LLAMA3 (d_llm=4096, requires HF auth)
+
+# ── TimeLLM-specific ──────────────────────────────────────────────────────────
+d_model:  128    # patch embedding intermediate dimension (before reprogramming)
+n_heads:  8      # reprogramming layer attention heads (must divide d_llm=768)
+n_tokens: 100    # learned prototype vectors in reprogramming cross-attention
+
+# ── Shared hyperparameters ────────────────────────────────────────────────────
+dropout:  0.1
+
+# ── Training ──────────────────────────────────────────────────────────────────
+train_epochs:   10
+patience:       5
+batch_size:     16    # smaller than CFA: gradients flow through GPT2 during training
+learning_rate:  0.0001
+scale_data:     true
+
+# ── Models to run ─────────────────────────────────────────────────────────────
+# LLM-backbone (trained): TimeLLM, GPT4MTS
+# Zero-shot (text generation): LLMTime, PromptCast
+models:
+  - TimeLLM
+  - GPT4MTS
+  - LLMTime
+  - PromptCast
+
+# ── Generative LLM for zero-shot models ───────────────────────────────────────
+# LLMTime and PromptCast need an AutoModelForCausalLM (full LM head).
+# Defaults to the same value as llm_model above; override here if needed.
+generative_llm:
+  model_name: GPT2   # GPT2 | meta-llama/Meta-Llama-3-8B-Instruct | etc.
+
+# ── LLMTime hyperparameters ───────────────────────────────────────────────────
+llmtime:
+  n_samples: 10     # number of stochastic completions to sample
+  prec:      3      # digits after decimal point in serialised representation
+  temp:      0.7    # sampling temperature
+  alpha:     0.95   # quantile to scale to 1 (scaler)
+  beta:      0.3    # lower-bound shift (scaler)
+  max_val:   10.0   # max abs value after scaling (determines digit width)
+
+# ── PromptCast hyperparameters ────────────────────────────────────────────────
+promptcast:
+  n_samples: 10
+  prec:      3
+  temp:      0.8
+  max_val:   10.0   # covers [-10, 10]; increase for unnormalised data
+
+# ── Domain prompts (Appendix C, TimeMMD paper) ────────────────────────────────
+# These describe each dataset's domain to help the frozen LLM interpret the
+# reprogrammed patch tokens. In TimeLLM, they are prepended as the text prefix.
+# In GPT4MTS, they are combined with per-sample TS statistics and annotation text.
+domain_prompts:
+  Agriculture: >-
+    The dataset is related to agriculture, capturing time series of crop yields,
+    livestock production, and related agricultural economic indicators. Agricultural
+    time series typically exhibit strong seasonal patterns driven by planting and
+    harvesting cycles, high sensitivity to weather conditions, and long-term trends
+    influenced by technological advances and policy changes. Please help forecast
+    the future values of this agricultural time series.
+
+  Climate: >-
+    The dataset is related to climate and environmental science, capturing
+    meteorological measurements such as temperature, precipitation, humidity, and
+    related climate variables. Climate time series exhibit seasonal cycles with
+    periodic annual patterns, long-term trends associated with climate change, and
+    high variability driven by geographic and atmospheric factors. Please help
+    forecast the future values of this climate time series.
+
+  Economy: >-
+    The dataset is related to economics and finance, capturing macroeconomic
+    indicators such as GDP, trade volumes, employment rates, inflation indices, and
+    financial market data. Economic time series are influenced by business cycles,
+    monetary and fiscal policy changes, global trade dynamics, and structural
+    economic shifts. Please help forecast the future values of this economic time
+    series.
+
+  Energy: >-
+    The dataset is related to energy systems, capturing time series of energy
+    production, consumption, pricing, or demand across sectors such as electricity,
+    oil, gas, and renewables. Energy time series exhibit seasonal demand patterns
+    driven by heating and cooling needs, industrial cycles, and variability from
+    renewable generation. Please help forecast the future values of this energy
+    time series.
+
+  PublicHealth: >-
+    The dataset is related to public health, capturing surveillance data such as
+    disease incidence rates, mortality statistics, vaccination coverage, and
+    healthcare utilisation metrics. Public health time series exhibit epidemic
+    dynamics, seasonal patterns in infectious disease transmission, and responses
+    to public health interventions and policy changes. Please help forecast the
+    future values of this public health time series.
+
+  Security: >-
+    The dataset is related to security and conflict, capturing time series of
+    incident rates, conflict indices, crime statistics, or related security metrics.
+    These time series reflect complex interactions between social, political,
+    economic, and environmental drivers, and may exhibit abrupt structural breaks
+    alongside more gradual temporal trends. Please help forecast the future values
+    of this security time series.
+
+  SocialGood: >-
+    The dataset is related to social welfare and sustainable development, capturing
+    time series of poverty rates, education access, gender equality indices,
+    humanitarian aid flows, and other social good metrics. These time series reflect
+    long-term structural trends shaped by policy interventions, economic conditions,
+    and external shocks such as natural disasters or conflicts. Please help forecast
+    the future values of this social good time series.
+
+  Traffic: >-
+    The dataset is related to transportation and urban mobility, capturing time
+    series of traffic flow, vehicle counts, travel times, or transportation demand
+    metrics. Traffic time series exhibit strong daily and weekly periodicity,
+    seasonal variation, and sensitivity to special events, weather conditions, and
+    changes in urban infrastructure. Please help forecast the future values of this
+    traffic time series.
+
+# ── TimeMMD datasets ──────────────────────────────────────────────────────────
+datasets:
+  - name:       Agriculture
+    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Agriculture/train.json
+    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Agriculture/val.json
+    freq:       monthly
+
+  - name:       Climate
+    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Climate/train.json
+    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Climate/val.json
+    freq:       monthly
+
+  - name:       Economy
+    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Economy/train.json
+    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Economy/val.json
+    freq:       monthly
+
+  - name:       Energy
+    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Energy/train.json
+    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Energy/val.json
+    freq:       weekly
+
+  - name:       PublicHealth
+    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/PublicHealth/train.json
+    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/PublicHealth/val.json
+    freq:       weekly
+
+  - name:       Security
+    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Security/train.json
+    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Security/val.json
+    freq:       monthly
+
+  - name:       SocialGood
+    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/SocialGood/train.json
+    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/SocialGood/val.json
+    freq:       monthly
+
+  - name:       Traffic
+    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Traffic/train.json
+    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Traffic/val.json
+    freq:       monthly
+
+# ── Frequency-specific window and patch settings ──────────────────────────────
+# patch_len and stride are tuned for each frequency:
+#   monthly: very short sequences (seq_len=8), small patches
+#   weekly:  medium sequences (seq_len=36), medium patches
+#   daily:   longer sequences (seq_len=96), larger patches
+freq_settings:
+  monthly:
+    seq_len:      8
+    label_len:    4
+    pred_lengths: [6, 8, 10, 12]
+    patch_len:    2    # (8-2)//1 + 1 = 7 patches
+    stride:       1
+
+  weekly:
+    seq_len:      36
+    label_len:    18
+    pred_lengths: [12, 24, 36, 48]
+    patch_len:    4    # (36-4)//2 + 1 = 17 patches
+    stride:       2
+
+  daily:
+    seq_len:      96
+    label_len:    48
+    pred_lengths: [48, 96, 192, 336]
+    patch_len:    16   # (96-16)//8 + 1 = 11 patches
+    stride:       8
