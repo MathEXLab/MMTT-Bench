@@ -83,6 +83,47 @@ def load_model_results(path: str) -> dict:
     return _load(path)
 
 
+def filter_model_data(model_data: dict,
+                      fix_model: str | None,
+                      fix_mode:  str | None) -> dict:
+    """
+    Subset compound 'backbone|injection_mode' model keys by one fixed axis,
+    then strip that axis so only the varying dimension remains as the label.
+
+    --fix-model PatchTST  →  keep 'PatchTST|*' keys, rename to injection mode
+    --fix-mode  cfa       →  keep '*|cfa'     keys, rename to backbone name
+
+    If neither flag is set the data is returned unchanged.
+    """
+    if not fix_model and not fix_mode:
+        return model_data
+
+    import copy
+    data = copy.deepcopy(model_data)
+
+    def _keep(key: str) -> bool:
+        if fix_model:
+            return key == fix_model or key.startswith(f'{fix_model}|')
+        return key == fix_mode or key.endswith(f'|{fix_mode}')
+
+    def _rename(key: str) -> str:
+        if '|' not in key:
+            return key
+        if fix_model:
+            return key.split('|', 1)[1]   # 'PatchTST|cfa' → 'cfa'
+        return key.rsplit('|', 1)[0]       # 'PatchTST|cfa' → 'PatchTST'
+
+    data['models'] = [_rename(m) for m in data['models'] if _keep(m)]
+
+    new_results: dict = {}
+    for cat, cat_results in data['results'].items():
+        new_results[cat] = {
+            _rename(k): v for k, v in cat_results.items() if _keep(k)
+        }
+    data['results'] = new_results
+    return data
+
+
 # ---------------------------------------------------------------------------
 # Delta + table computation
 # ---------------------------------------------------------------------------
@@ -130,14 +171,17 @@ def compute_deltas(model_data: dict) -> dict[str, dict[str, dict[str, float]]]:
             text_result = results.get(cat, {}).get(model_key, {}).get("overall")
             if baseline is None or text_result is None:
                 continue
-            model_deltas["delta_r2"][cat]   = text_result["r2"]   - baseline["r2"]
-            model_deltas["delta_rmse"][cat] = text_result["rmse"] - baseline["rmse"]
-            model_deltas["delta_mae"][cat]  = text_result["mae"]  - baseline["mae"]
-            model_deltas["delta_mse"][cat]  = text_result["mse"]  - baseline["mse"]
-            model_deltas["r2"][cat]         = text_result["r2"]
-            model_deltas["rmse"][cat]       = text_result["rmse"]
-            model_deltas["mae"][cat]        = text_result["mae"]
-            model_deltas["mse"][cat]        = text_result["mse"]
+            nan = float("nan")
+            r2_t = text_result.get("r2")
+            r2_b = baseline.get("r2")
+            model_deltas["delta_r2"][cat]   = (r2_t - r2_b) if r2_t is not None and r2_b is not None else nan
+            model_deltas["delta_rmse"][cat] = text_result.get("rmse", nan) - baseline.get("rmse", nan)
+            model_deltas["delta_mae"][cat]  = text_result.get("mae",  nan) - baseline.get("mae",  nan)
+            model_deltas["delta_mse"][cat]  = text_result.get("mse",  nan) - baseline.get("mse",  nan)
+            model_deltas["r2"][cat]         = r2_t if r2_t is not None else nan
+            model_deltas["rmse"][cat]       = text_result.get("rmse", nan)
+            model_deltas["mae"][cat]        = text_result.get("mae",  nan)
+            model_deltas["mse"][cat]        = text_result.get("mse",  nan)
 
         deltas[model_key] = model_deltas
 
@@ -161,7 +205,10 @@ def build_eval_table(
     for model_name, deltas in model_delta.items():
         if model_name == 'knn':
             continue
-        if not all(deltas.values()):
+        # delta_r2/r2 are empty for CFA output (no r2 metric); only require
+        # at least one of the non-r2 metrics to have data before including.
+        if not any(deltas.get(k) for k in ("delta_mse", "delta_mae", "delta_rmse",
+                                            "mse", "mae", "rmse")):
             continue
 
         row_data: dict[str, list] = {"category": all_cats}
@@ -204,7 +251,6 @@ def build_eval_table(
 
     return tables
 
-
 def print_correlations(
     tables:       dict[str, pd.DataFrame],
     info_metrics: list[str],
@@ -230,6 +276,7 @@ def print_correlations(
                     continue
                 mask   = df[info_m].notna() & df[perf_m].notna()
                 x_vals = df.loc[mask, info_m].values
+                x_vals = df.loc[mask, f"{info_m}_std"].values
                 y_vals = df.loc[mask, perf_m].values
                 if len(x_vals) < 3:
                     continue
@@ -238,6 +285,20 @@ def print_correlations(
                 print(f"  {info_m:<25s} vs {perf_m:<14s}"
                       f"  Spearman ρ={rho:+.2f} (p={p1:.3f})"
                       f"  Kendall τ={tau:+.2f} (p={p2:.3f})")
+                # tab = df[info_m]
+                # std = df[f'{info_m}_std']
+                # n = df['n']
+
+                # # for each cat
+                # p = [two_sided_z_test(
+                #     tab.loc[cat], std.loc[cat], n.loc[cat], tab.loc["no_text"], std.loc["no_text"], n.loc["no_text"]
+                #     ) for cat in categories] + [0]
+
+                # mi_diff = [tab.loc[cat] - tab.loc["no_text"] for cat in categories]
+                # mi_std = [std.loc[cat] - std.loc["no_text"] for cat in categories]
+
+                # model_diff = [tables[model]['delta_mse'].loc[cat] for cat in categories]
+
 
     print(f"{'═' * 70}")
 
@@ -295,7 +356,15 @@ def main() -> None:
                         help="Path(s) to train.py JSON(s), matching --metrics order")
     parser.add_argument("--model-filter", nargs="*", default=None,
                         help="Only show these model keys (e.g. ridge mlp)")
-    parser.add_argument("--perf-metric", default="delta_r2",
+    parser.add_argument("--fix-model", default=None, metavar="BACKBONE",
+                        help="Fix one backbone and vary injection modes "
+                             "(e.g. --fix-model PatchTST). Strips backbone prefix "
+                             "from compound 'backbone|mode' keys.")
+    parser.add_argument("--fix-mode", default=None, metavar="MODE",
+                        help="Fix one injection mode and vary backbones "
+                             "(e.g. --fix-mode cfa). Strips mode suffix "
+                             "from compound 'backbone|mode' keys.")
+    parser.add_argument("--perf-metric", default="delta_mse",
                         choices=["delta_r2", "delta_rmse", "delta_mae", "delta_mse",
                                  "r2", "rmse", "mae", "mse"],
                         help="Performance metric to plot (default: delta_r2)")
@@ -327,6 +396,7 @@ def main() -> None:
 
             metrics_data = load_metrics(metrics_path)
             model_data   = load_model_results(models_path)
+            model_data   = filter_model_data(model_data, args.fix_model, args.fix_mode)
 
             all_deltas = compute_deltas(model_data)
             if args.model_filter:
@@ -349,8 +419,9 @@ def main() -> None:
 
             raw_key = args.perf_metric[6:] if args.perf_metric.startswith("delta_") else args.perf_metric
             best_model_scores = {
-                model: model_data["results"]["no_text"][model]["overall"][raw_key]
+                model: model_data["results"]["no_text"][model]["overall"].get(raw_key)
                 for model in model_data["models"]
+                if model in model_data["results"].get("no_text", {})
             }
 
             plot_info_vs_delta(

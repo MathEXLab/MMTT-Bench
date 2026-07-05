@@ -45,8 +45,14 @@ Config format (see example_config.yaml for full reference):
 
 import argparse
 import json
+import os
 from copy import deepcopy
 from pathlib import Path
+
+# Cap OpenBLAS threads before any numpy/scipy import to prevent segfaults on
+# machines with >128 cores (OpenBLAS's compiled maximum).
+for _blas_var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_blas_var, "64")
 
 import numpy as np
 import yaml
