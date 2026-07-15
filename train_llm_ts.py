@@ -27,6 +27,14 @@ Models
     context and optional annotation are prepended as a free-text preamble.
     No training — pure causal completion.
 
+  DirectPrompt  (CiK-style direct prompting; protocol of arXiv:2506.21611)
+    Zero-shot.  Context + plain-decimal history in natural language; an
+    instruction-tuned LLM is asked to return the forecast as comma-separated
+    values between <forecast></forecast> tags.  Completions that do not parse
+    to pred_len values are rejected; forecast = median of parsed completions.
+    Use with an instruct model (e.g. Qwen2.5-Instruct) — a base LM like GPT2
+    falls back to primed plain-text completion but is a strawman here.
+
 Text conditions mirror train_transformer_cfa.py:
   domain_only  — domain prompt only, no per-sample annotation (baseline)
   correct      — domain prompt + correct annotation
@@ -52,6 +60,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -343,7 +352,7 @@ class GPT4MTS(nn.Module):
 # Zero-shot model registry
 # ─────────────────────────────────────────────────────────────────────────────
 
-_ZERO_SHOT_MODELS: frozenset[str] = frozenset({'LLMTime', 'PromptCast'})
+_ZERO_SHOT_MODELS: frozenset[str] = frozenset({'LLMTime', 'PromptCast', 'DirectPrompt'})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -461,6 +470,8 @@ class LLMTime:
         alpha:     float = 0.95,
         beta:      float = 0.3,
         max_val:   float = 10.0,
+        record_transcripts: bool = False,
+        gen_batch_size: int | None = None,
     ):
         self.llm       = llm_model
         self.tokenizer = tokenizer
@@ -471,6 +482,12 @@ class LLMTime:
         self.alpha     = alpha
         self.beta      = beta
         self.max_val   = max_val
+        self.record_transcripts = record_transcripts
+        self.transcripts: list[dict] = []
+        # Max series generated in parallel per generate() call (each expands to
+        # gen_batch_size * n_samples sequences via num_return_sequences). None
+        # = try the whole batch at once, backing off automatically on OOM.
+        self.gen_batch_size = gen_batch_size
 
     def predict(
         self,
@@ -479,52 +496,141 @@ class LLMTime:
         sample_texts: list[str],      # unused
     ) -> torch.Tensor:                # [B, pred_len, 1]
         B, device = x.size(0), x.device
+        arrs: list[np.ndarray] = []
+        inv_transforms = []
+        input_strs: list[str] = []
+        for i in range(B):
+            arr              = x[i, :, 0].cpu().float().numpy()
+            transform, inv_t = _get_scaler(arr, self.alpha, self.beta)
+            arrs.append(arr)
+            inv_transforms.append(inv_t)
+            input_strs.append(_serialize_arr(transform(arr), self.prec, self.max_val))
+
+        # One generate() call for the whole batch: B series × n_samples
+        # completions each, instead of B*n_samples sequential single-item calls.
+        raw_preds, completions = self._sample_batch(input_strs, device)
+
         preds: list[list[float]] = []
         for i in range(B):
-            arr               = x[i, :, 0].cpu().float().numpy()
-            transform, inv_t  = _get_scaler(arr, self.alpha, self.beta)
-            input_str         = _serialize_arr(transform(arr), self.prec, self.max_val)
-            vals              = self._sample_median(input_str, inv_t, device)
-            preds.append(vals)
+            inv_t  = inv_transforms[i]
+            scaled = [
+                ((s := [inv_t(v) for v in vals]) + [s[-1]] * self.pred_len)[:self.pred_len]
+                for vals in raw_preds[i]
+            ]
+            vals_i = (np.median(np.array(scaled), axis=0).tolist()
+                      if scaled else [0.0] * self.pred_len)
+            preds.append(vals_i)
+            if self.record_transcripts:
+                self.transcripts.append({
+                    'history':     arrs[i].tolist(),
+                    'prompt':      input_strs[i],
+                    'completions': completions[i],
+                    'forecast':    vals_i,
+                })
         out = torch.tensor(preds, dtype=torch.float32, device=device)
         return out.unsqueeze(-1)   # [B, pred_len, 1]
 
-    def _sample_median(
-        self, input_str: str, inv_t, device
-    ) -> list[float]:
+    def _sample_batch(
+        self, input_strs: list[str], device
+    ) -> tuple[list[list[list[float]]], list[list[str]]]:
+        """
+        Generate n_samples completions for every series in the batch, chunked
+        so at most `chunk * n_samples` sequences are ever in flight at once.
+        Starts at gen_batch_size (or the whole batch if unset) and halves on
+        CUDA OOM, down to a single series per generate() call, so this can't
+        OOM worse than the pre-batching implementation.
+
+        Returns (raw_preds, completions), both length B:
+          raw_preds[i]    — list of parsed digit-space value lists (one per
+                             accepted completion for series i; unscaled).
+          completions[i]  — list of n_samples raw decoded strings for series i.
+        """
+        B = len(input_strs)
+        raw_preds:   list = [None] * B
+        completions: list = [None] * B
+        chunk = min(self.gen_batch_size or B, B)
+
+        start = 0
+        while start < B:
+            end = min(start + chunk, B)
+            try:
+                r_chunk, c_chunk = self._generate_chunk(input_strs[start:end], device)
+            except RuntimeError as exc:
+                if 'out of memory' not in str(exc).lower():
+                    raise
+                if chunk == 1:
+                    raise RuntimeError(
+                        'LLMTime: CUDA OOM even at gen_batch_size=1 (single series, '
+                        f'n_samples={self.n_samples}). Try lowering n_samples or using '
+                        'a smaller generative_llm model.'
+                    ) from exc
+                if device.type == 'cuda':
+                    torch.cuda.empty_cache()
+                chunk = max(1, chunk // 2)
+                print(f'    [LLMTime] CUDA OOM — retrying with gen_batch_size={chunk}')
+                continue
+            for j, idx in enumerate(range(start, end)):
+                raw_preds[idx], completions[idx] = r_chunk[j], c_chunk[j]
+            start = end
+
+        return raw_preds, completions
+
+    def _generate_chunk(
+        self, input_strs: list[str], device
+    ) -> tuple[list[list[list[float]]], list[list[str]]]:
+        """One generate() call for a chunk of series (batch dim = len(input_strs),
+        num_return_sequences = n_samples), instead of per-series sequential calls."""
+        B = len(input_strs)
         # Each serialised step uses at most (prec+2) digit tokens × 2 GPT2 tokens each.
         # Reserve that budget before encoding so input + output never exceeds model max.
         model_max = getattr(self.llm.config, 'max_position_embeddings', 1024)
         max_new   = int((self.prec + 3) * 2 * self.pred_len * 1.5) + 10
         max_input = max(model_max - max_new, 64)
 
-        enc = self.tokenizer(
-            input_str, return_tensors='pt', truncation=True, max_length=max_input,
-        ).to(device)
-        # Recalculate max_new tightly now that we know the actual input length
-        max_new = max(model_max - enc['input_ids'].shape[1], max_new)
+        # Left padding: generate() then appends new tokens at the same column
+        # for every row regardless of each prompt's real (unpadded) length.
+        orig_padding_side = self.tokenizer.padding_side
+        self.tokenizer.padding_side = 'left'
+        try:
+            enc = self.tokenizer(
+                input_strs, return_tensors='pt', truncation=True,
+                max_length=max_input, padding=True,
+            ).to(device)
+        finally:
+            self.tokenizer.padding_side = orig_padding_side
 
-        all_preds: list[list[float]] = []
-        for _ in range(self.n_samples):
-            with torch.no_grad():
-                out_ids = self.llm.generate(
-                    **enc,
-                    max_new_tokens = max_new,
-                    do_sample      = True,
-                    temperature    = self.temp,
-                    pad_token_id   = self.tokenizer.eos_token_id,
-                )
-            new_text = self.tokenizer.decode(
-                out_ids[0, enc['input_ids'].shape[1]:], skip_special_tokens=True
+        input_len = enc['input_ids'].shape[1]
+        # Recalculate max_new tightly now that we know the actual (padded) input length
+        max_new = max(model_max - input_len, max_new)
+
+        with torch.no_grad():
+            out_ids = self.llm.generate(
+                **enc,
+                max_new_tokens       = max_new,
+                do_sample            = True,
+                temperature          = self.temp,
+                num_return_sequences = self.n_samples,
+                pad_token_id         = self.tokenizer.eos_token_id,
             )
-            vals = _deserialize_str(new_text, self.prec, self.max_val, self.pred_len)
-            if vals is not None:
-                scaled = [inv_t(v) for v in vals]
-                all_preds.append((scaled + [scaled[-1]] * self.pred_len)[:self.pred_len])
+        # generate() expands the batch via repeat_interleave, so each series'
+        # n_samples completions are contiguous: rows [i*n_samples:(i+1)*n_samples].
 
-        if not all_preds:
-            return [0.0] * self.pred_len
-        return np.median(np.array(all_preds), axis=0).tolist()
+        raw_preds: list[list[list[float]]] = []
+        completions: list[list[str]] = []
+        for i in range(B):
+            block = out_ids[i * self.n_samples : (i + 1) * self.n_samples]
+            texts = [
+                self.tokenizer.decode(row[input_len:], skip_special_tokens=True)
+                for row in block
+            ]
+            completions.append(texts)
+            parsed = [
+                vals for text in texts
+                if (vals := _deserialize_str(text, self.prec, self.max_val, self.pred_len))
+                is not None
+            ]
+            raw_preds.append(parsed)
+        return raw_preds, completions
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -553,6 +659,7 @@ class PromptCast:
         prec:      int   = 3,
         temp:      float = 0.8,
         max_val:   float = 10.0,
+        record_transcripts: bool = False,
     ):
         self.llm       = llm_model
         self.tokenizer = tokenizer
@@ -561,6 +668,8 @@ class PromptCast:
         self.prec      = prec
         self.temp      = temp
         self.max_val   = max_val
+        self.record_transcripts = record_transcripts
+        self.transcripts: list[dict] = []
 
     def predict(
         self,
@@ -594,12 +703,19 @@ class PromptCast:
                 f' What will the values for the next {self.pred_len} time steps be?'
                 f' The values for the next {self.pred_len} time steps will be'
             )
-            vals = self._sample_median(prompt, device)
+            vals, completions = self._sample_median(prompt, device)
             preds.append(vals)
+            if self.record_transcripts:
+                self.transcripts.append({
+                    'history':     arr.tolist(),
+                    'prompt':      prompt,
+                    'completions': completions,
+                    'forecast':    vals,
+                })
         out = torch.tensor(preds, dtype=torch.float32, device=device)
         return out.unsqueeze(-1)
 
-    def _sample_median(self, prompt: str, device) -> list[float]:
+    def _sample_median(self, prompt: str, device) -> tuple[list[float], list[str]]:
         model_max = getattr(self.llm.config, 'max_position_embeddings', 1024)
         max_new   = int((self.prec + 3) * 2 * self.pred_len * 1.5) + 10
         max_input = max(model_max - max_new, 64)
@@ -610,6 +726,7 @@ class PromptCast:
         max_new = max(model_max - enc['input_ids'].shape[1], max_new)
 
         all_preds: list[list[float]] = []
+        completions: list[str] = []
         for _ in range(self.n_samples):
             with torch.no_grad():
                 out_ids = self.llm.generate(
@@ -622,6 +739,7 @@ class PromptCast:
             new_text = self.tokenizer.decode(
                 out_ids[0, enc['input_ids'].shape[1]:], skip_special_tokens=True
             )
+            completions.append(new_text)
             # Prepend a time_sep so _deserialize_str treats the first token as
             # the start of a new time step (matching the LLMTime digit format).
             vals = _deserialize_str(' ,' + new_text, self.prec, self.max_val, self.pred_len)
@@ -629,8 +747,171 @@ class PromptCast:
                 all_preds.append((vals + [vals[-1]] * self.pred_len)[:self.pred_len])
 
         if not all_preds:
-            return [0.0] * self.pred_len
-        return np.median(np.array(all_preds), axis=0).tolist()
+            return [0.0] * self.pred_len, completions
+        return np.median(np.array(all_preds), axis=0).tolist(), completions
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DirectPrompt  (CiK-style direct prompting — protocol of arXiv:2506.21611)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_FLOAT_RE = re.compile(r'[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?')
+
+
+class DirectPrompt:
+    """
+    Zero-shot forecaster following the prompting-based protocol of
+    "When Does Multimodality Lead to Better Time Series Forecasting?"
+    (arXiv:2506.21611), whose prompts follow CiK (Williams et al. 2025):
+    free-text context + plain-decimal history, forecast requested between
+    <forecast></forecast> tags.
+
+    No digit serialisation and no rescaling — values are used as-is (the
+    dataset already standardises them) and parsed back with a float regex.
+    A completion is rejected unless it yields >= pred_len finite values;
+    forecast = element-wise median over the accepted completions.  If every
+    completion is rejected, falls back to persistence (repeat last value)
+    and counts it in `stats`.
+
+    Uses the tokenizer's chat template when available (instruct models);
+    base LMs get a plain-text prompt primed with the opening <forecast> tag.
+    """
+
+    def __init__(
+        self,
+        llm_model,
+        tokenizer,
+        pred_len:  int,
+        n_samples: int   = 10,
+        temp:      float = 0.7,
+        decimals:  int   = 3,
+        record_transcripts: bool = False,
+    ):
+        self.llm       = llm_model
+        self.tokenizer = tokenizer
+        self.pred_len  = pred_len
+        self.n_samples = n_samples
+        self.temp      = temp
+        self.decimals  = decimals
+        self.stats     = {'completions': 0, 'rejected': 0, 'fallback': 0}
+        self.record_transcripts = record_transcripts
+        self.transcripts: list[dict] = []
+
+    def predict(
+        self,
+        x:            torch.Tensor,   # [B, seq_len, 1]
+        domain_texts: list[str],
+        sample_texts: list[str],
+    ) -> torch.Tensor:                # [B, pred_len, 1]
+        B, device = x.size(0), x.device
+        preds: list[list[float]] = []
+        for i in range(B):
+            arr    = x[i, :, 0].cpu().float().numpy()
+            prompt = self._build_prompt(arr, domain_texts[i], sample_texts[i])
+            vals, completions = self._sample_median(prompt, fallback=float(arr[-1]))
+            preds.append(vals)
+            if self.record_transcripts:
+                self.transcripts.append({
+                    'history':     arr.tolist(),
+                    'prompt':      prompt,
+                    'completions': completions,
+                    'forecast':    vals,
+                })
+        out = torch.tensor(preds, dtype=torch.float32, device=device)
+        return out.unsqueeze(-1)
+
+    def _build_prompt(self, arr: np.ndarray, domain: str, note: str) -> str:
+        ctx_parts = [p for p in (domain.strip(),) if p]
+        if note.strip():
+            ctx_parts.append(f'Note: {note.strip()}')
+        context = ('\n\n'.join(ctx_parts) + '\n\n') if ctx_parts else ''
+        hist    = ', '.join(f'{v:.{self.decimals}f}' for v in arr)
+        return (
+            f'{context}'
+            f'Here is a historical time series covering the last {len(arr)} '
+            f'time steps:\n'
+            f'<history>\n{hist}\n</history>\n\n'
+            f'Predict the next {self.pred_len} values of this time series, '
+            f'taking the context above into account.\n'
+            f'Respond with exactly {self.pred_len} comma-separated numeric '
+            f'values between <forecast> and </forecast> tags, .'
+            f'and your reasoning for the prediction between <reasoning> '
+            f'and </reasoning> tags, and nothing else.'
+        )
+
+    def _encode(self, prompt: str, device) -> torch.Tensor:
+        if getattr(self.tokenizer, 'chat_template', None):
+            ids = self.tokenizer.apply_chat_template(
+                [{'role': 'user', 'content': prompt}],
+                add_generation_prompt=True, return_tensors='pt',
+            )
+            if not torch.is_tensor(ids):   # newer transformers: BatchEncoding
+                ids = ids['input_ids']
+        else:
+            # Base LM: prime the completion with the opening tag
+            ids = self.tokenizer(
+                prompt + '\n<forecast>\n', return_tensors='pt'
+            ).input_ids
+        # Keep the END of the prompt (recent history + instructions) if the
+        # model's context is too small for it.
+        model_max = getattr(self.llm.config, 'max_position_embeddings', 4096)
+        max_input = model_max - self._max_new()
+        if ids.shape[1] > max_input:
+            ids = ids[:, -max_input:]
+        return ids.to(device)
+
+    def _max_new(self) -> int:
+        # ~6 tokens per formatted value plus tags/whitespace slack
+        return self.pred_len * (self.decimals + 7) + 320
+
+    def _parse_forecast(self, text: str) -> list[float] | None:
+        m = re.search(r'<forecast>(.*?)</forecast>', text, re.S)
+        if m:
+            region = m.group(1)
+        else:
+            # Opening tag may sit in the prompt (base-LM priming) or the
+            # closing tag may be missing.
+            region = text.split('</forecast>')[0]
+            if '<forecast>' in region:
+                region = region.split('<forecast>', 1)[1]
+        vals = [float(v) for v in _FLOAT_RE.findall(region)]
+        vals = vals[:self.pred_len]
+        if len(vals) < self.pred_len:
+            return None
+        if any(not math.isfinite(v) or abs(v) > 1e6 for v in vals):
+            return None
+        return vals
+
+    def _sample_median(self, prompt: str, fallback: float) -> tuple[list[float], list[str]]:
+        device = next(self.llm.parameters()).device
+        ids    = self._encode(prompt, device)
+        with torch.no_grad():
+            out_ids = self.llm.generate(
+                ids,
+                attention_mask       = torch.ones_like(ids),
+                max_new_tokens       = self._max_new(),
+                do_sample            = True,
+                temperature          = self.temp,
+                num_return_sequences = self.n_samples,
+                pad_token_id         = self.tokenizer.eos_token_id,
+            )
+        accepted: list[list[float]] = []
+        completions: list[str] = []
+        for k in range(out_ids.shape[0]):
+            new_text = self.tokenizer.decode(
+                out_ids[k, ids.shape[1]:], skip_special_tokens=True
+            )
+            completions.append(new_text)
+            vals = self._parse_forecast(new_text)
+            self.stats['completions'] += 1
+            if vals is None:
+                self.stats['rejected'] += 1
+            else:
+                accepted.append(vals)
+        if not accepted:
+            self.stats['fallback'] += 1
+            return [fallback] * self.pred_len, completions
+        return np.median(np.array(accepted), axis=0).tolist(), completions
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -670,8 +951,9 @@ class MmttDataset(Dataset):
                 continue
             idx = dense_t.index(t_i)
 
-            start = max(0, idx - seq_len)
-            lb    = dense_y[start:idx]
+            # Lookback ends at the annotation point inclusive (matches data.py)
+            start = max(0, idx + 1 - seq_len)
+            lb    = dense_y[start:idx + 1]
             if len(lb) < seq_len:
                 lb = np.concatenate([np.full(seq_len - len(lb), lb[0] if len(lb) else 0.0), lb])
             lb = lb[-seq_len:]
@@ -862,6 +1144,7 @@ def _build_zero_shot_model(
     model_name: str, tokenizer, llm_model, pred_len: int, cfg: dict
 ):
     """Instantiate LLMTime or PromptCast from config. Built once per pred_len."""
+    record_transcripts = cfg.get('save_transcripts', False)
     if model_name == 'LLMTime':
         kw = cfg.get('llmtime', {})
         return LLMTime(
@@ -874,6 +1157,8 @@ def _build_zero_shot_model(
             alpha      = kw.get('alpha',     0.95),
             beta       = kw.get('beta',      0.3),
             max_val    = kw.get('max_val',   10.0),
+            record_transcripts = record_transcripts,
+            gen_batch_size = kw.get('gen_batch_size', None),
         )
     if model_name == 'PromptCast':
         kw = cfg.get('promptcast', {})
@@ -885,6 +1170,18 @@ def _build_zero_shot_model(
             prec       = kw.get('prec',      3),
             temp       = kw.get('temp',      0.8),
             max_val    = kw.get('max_val',   10.0),
+            record_transcripts = record_transcripts,
+        )
+    if model_name == 'DirectPrompt':
+        kw = cfg.get('directprompt', {})
+        return DirectPrompt(
+            llm_model  = llm_model,
+            tokenizer  = tokenizer,
+            pred_len   = pred_len,
+            n_samples  = kw.get('n_samples', 10),
+            temp       = kw.get('temp',      0.7),
+            decimals   = kw.get('decimals',  3),
+            record_transcripts = record_transcripts,
         )
     raise ValueError(f'Unknown zero-shot model: {model_name}')
 
@@ -1103,7 +1400,44 @@ def _compute_metrics(
     mse   = float(mean_squared_error(trues, preds))
     mae   = float(mean_absolute_error(trues, preds))
     _set_train(model)
-    return {'mse': mse, 'rmse': float(np.sqrt(mse)), 'mae': mae}
+    metrics = {'mse': mse, 'rmse': float(np.sqrt(mse)), 'mae': mae}
+    stats = getattr(model, 'stats', None)
+    if stats and stats.get('completions'):
+        print(f"    parse stats: {stats['completions']} completions, "
+              f"{stats['rejected']} rejected, "
+              f"{stats['fallback']} persistence fallbacks")
+        metrics['parse_rejected_frac'] = stats['rejected'] / stats['completions']
+        metrics['fallback_forecasts']  = stats['fallback']
+        model.stats = {k: 0 for k in stats}
+    return metrics
+
+
+def _dump_transcripts(
+    model, ds, ds_name: str, pred_len: int, model_name: str, cond: str,
+    root: Path, enabled: bool,
+) -> None:
+    """
+    Write out per-sample (history, prompt, raw completions, forecast,
+    ground truth) records collected by a zero-shot model's last
+    _compute_metrics call, then clear them for the next text condition.
+
+    Relies on val loaders being shuffle=False, so `model.transcripts`
+    (appended in dataset order by `predict`) lines up 1:1 with `ds.data_y`.
+    """
+    if not enabled or model is None or not getattr(model, 'record_transcripts', False):
+        return
+    transcripts = model.transcripts
+    model.transcripts = []
+    if not transcripts:
+        return
+    future = ds.data_y[:, -pred_len:, 0]
+    for rec, gt in zip(transcripts, future):
+        rec['ground_truth'] = gt.tolist()
+    out_path = root / ds_name / f'pred{pred_len}_{model_name}_{cond}.json'
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, 'w') as f:
+        json.dump(transcripts, f, indent=2)
+    print(f'    transcripts → {out_path}  ({len(transcripts)} samples)')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1137,6 +1471,10 @@ def parse_args() -> argparse.Namespace:
                    help='domain_only | correct | incorrect | irrelevant; omit for all')
     p.add_argument('--output',  '-o', default=None,
                    help='Directory to write per-(dataset, pred_len) JSON results')
+    p.add_argument('--save-transcripts', action='store_true', dest='save_transcripts',
+                   help='Save full prompts/completions for zero-shot models '
+                        '(LLMTime/PromptCast/DirectPrompt) under <output>/transcripts/. '
+                        'Can also be set via `save_transcripts: true` in the config.')
     p.add_argument('--device',  default=None)
     p.add_argument('--seeds', type=int, nargs='+', default=[2021],
                    help='Random seeds; results are averaged across seeds')
@@ -1153,6 +1491,8 @@ def main() -> None:
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
+    cfg['save_transcripts'] = args.save_transcripts or cfg.get('save_transcripts', False)
+    transcripts_root = Path(args.output or '.') / 'transcripts'
 
     device = torch.device(
         args.device if args.device
@@ -1360,6 +1700,9 @@ def main() -> None:
                         all_results[key] = metrics
                         print(f'  domain_only  MSE={metrics["mse"]:.4f}  '
                               f'MAE={metrics["mae"]:.4f}')
+                    _dump_transcripts(prebuilt, all_val_ds, ds_name, pred_len,
+                                      model_name, 'domain_only',
+                                      transcripts_root, cfg['save_transcripts'])
 
                 # per-category with sample text
                 for cat in ['correct', 'incorrect', 'irrelevant']:
@@ -1375,6 +1718,9 @@ def main() -> None:
                         all_results[key] = metrics
                         print(f'  {cat}  MSE={metrics["mse"]:.4f}  '
                               f'MAE={metrics["mae"]:.4f}')
+                    _dump_transcripts(prebuilt, va_ds, ds_name, pred_len,
+                                      model_name, cat,
+                                      transcripts_root, cfg['save_transcripts'])
 
     # ── JSON output ───────────────────────────────────────────────────────
     if args.output:

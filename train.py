@@ -161,10 +161,13 @@ def parse_args() -> argparse.Namespace:
                    help='Path to validation split JSON (derived from train-path if omitted)')
     # ── Text embedding ────────────────────────────────────────────────────
     p.add_argument('--embedding-type', default=None,
-                   choices=['sentence_transformer', 'huggingface'],
-                   help='Text tokenizer type')
+                   choices=['sentence_transformer', 'huggingface', 'llm', 'dummy'],
+                   help='Text tokenizer type; dummy = oracle 1-D embedding '
+                        '(build_category_data_dummy_embedding), no text model')
     p.add_argument('--model-name', default=None,
                    help='HuggingFace model name for text embedding')
+    p.add_argument('--dummy-seed', type=int, default=None,
+                   help='RNG seed for incorrect-category dummy values')
     # ── TS tokenizer ──────────────────────────────────────────────────────
     p.add_argument('--ts-tokenizer', default=None,
                    choices=['patch', 'patch_mean', 'identity'],
@@ -203,6 +206,7 @@ def parse_args() -> argparse.Namespace:
         _yaml_defaults = {
             'embedding_type': cfg.get('embedding_type', 'sentence_transformer'),
             'model_name':     cfg.get('model_name', 'sentence-transformers/all-MiniLM-L6-v2'),
+            'dummy_seed':     cfg.get('dummy_seed', 0),
             'ts_tokenizer':   cfg.get('ts_tokenizer', 'patch_mean'),
             'lookback_steps': cfg.get('lookback_steps', 4),
             'horizon_steps':  cfg.get('horizon_steps', 1),
@@ -219,6 +223,7 @@ def parse_args() -> argparse.Namespace:
     _hard_defaults = {
         'embedding_type': 'sentence_transformer',
         'model_name':     'sentence-transformers/all-MiniLM-L6-v2',
+        'dummy_seed':     0,
         'ts_tokenizer':   'patch_mean',
         'lookback_steps': 4,
         'horizon_steps':  1,
@@ -250,26 +255,43 @@ def main() -> None:
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-    from src.mmtt_bench.data      import build_category_data, load_split
+    from src.mmtt_bench.data      import (
+        build_category_data, build_category_data_dummy_embedding, load_split,
+    )
     from src.mmtt_bench.tokenizers import TEXT_TOKENIZERS, TS_TOKENIZERS
 
-    def _build(path):
-        raw = load_split(path)
-        return build_category_data(
-            raw,
-            text_tokenizer = text_tok,
-            ts_tokenizer   = ts_tok,
-            horizon_steps  = args.horizon_steps,
-            lookback_steps = args.lookback_steps,
-            patch_len      = args.patch_len,
-        )
-
-    text_tok = TEXT_TOKENIZERS[args.embedding_type](args.model_name)
-    ts_tok   = TS_TOKENIZERS[args.ts_tokenizer](
+    ts_tok = TS_TOKENIZERS[args.ts_tokenizer](
         patch_len      = args.patch_len,
         stride         = args.stride,
         lookback_steps = args.lookback_steps,
     ).build()
+
+    if args.embedding_type == 'dummy':
+        # Oracle 1-D embedding derived from the true y_future value instead
+        # of a real text tokenizer (same branch as run.py _build_category_data).
+        def _build(path):
+            raw = load_split(path)
+            return build_category_data_dummy_embedding(
+                raw,
+                ts_tokenizer   = ts_tok,
+                horizon_steps  = args.horizon_steps,
+                lookback_steps = args.lookback_steps,
+                patch_len      = args.patch_len,
+                seed           = args.dummy_seed,
+            )
+    else:
+        text_tok = TEXT_TOKENIZERS[args.embedding_type](args.model_name)
+
+        def _build(path):
+            raw = load_split(path)
+            return build_category_data(
+                raw,
+                text_tokenizer = text_tok,
+                ts_tokenizer   = ts_tok,
+                horizon_steps  = args.horizon_steps,
+                lookback_steps = args.lookback_steps,
+                patch_len      = args.patch_len,
+            )
 
     print('Building train category data ...')
     train_cat = _build(args.train_path)

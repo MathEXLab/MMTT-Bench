@@ -68,8 +68,12 @@ def _attach_lookback_and_future(
         idx = t_rounded.index(t_i)
 
         # ── Lookback ────────────────────────────────────────────────────
-        start    = max(0, idx - lookback_steps)
-        y_window = dense_signal[start:idx]          # (lb,) or (lb, C)
+        # Ends at the annotation point inclusive: y(t) is an observation
+        # available at forecast time (standard sliding-window convention),
+        # and the text is generated from y(t)/dy(t) — excluding it would
+        # give text privileged access to the current signal state.
+        start    = max(0, idx + 1 - lookback_steps)
+        y_window = dense_signal[start:idx + 1]      # (lb,) or (lb, C)
         if y_window.shape[0] < lookback_steps:
             y_window = _pad(y_window, lookback_steps)   # _pad handles both dims
         y_lookback_tok = ts_tokenizer.encode(y_window)  # (n_patches,) or (n_patches*C,)
@@ -166,6 +170,63 @@ def _attach_text_embeddings(data, category_data, text_tokenizer):
             np.vstack(per_point)
             if per_point else np.empty((0,))
         )
+
+    return category_data
+
+
+# ---------------------------------------------------------------------------
+# Step 3 (alt): dummy oracle embedding, for testing metrics without a real
+# text tokenizer.
+# ---------------------------------------------------------------------------
+
+_DUMMY_VALID_VALUES = (-1.0, -0.5, 0.0, 1.0)
+
+
+def _attach_dummy_embeddings(data, category_data, rng,
+                              valid_values=_DUMMY_VALID_VALUES):
+    """
+    Replace text embeddings with a 1-D oracle value derived from the
+    ground-truth sine value at the annotated point, instead of encoding
+    ``x_text``. Each row becomes a single-number vector:
+
+        correct    -> [true y_future value]
+        incorrect  -> [random value from valid_values, excluding the true one]
+        irrelevant -> [0.0]
+
+    Lets metric tests target a known signal (e.g. unique_text should be
+    near-maximal for 'correct'/'incorrect' data and near-zero for
+    'irrelevant') without depending on a real text_tokenizer.
+    """
+    cat_rows = {cat: [] for cat in category_data}
+
+    for pt in data['points']:
+        if 'x_text' not in pt or 'y_future' not in pt:
+            continue
+        cat = pt.get('category')
+        if cat not in category_data:
+            continue
+
+        correct_value = float(np.asarray(pt['y_future']).ravel()[0])
+        n_samples = len(pt['x_text'])
+
+        for _ in range(n_samples):
+            if cat == 'irrelevant':
+                value = 0.0
+            elif cat == 'correct':
+                value = correct_value
+            elif cat == 'incorrect':
+                choices = [v for v in valid_values
+                           if not np.isclose(v, correct_value)]
+                value = rng.choice(choices)
+            else:
+                raise ValueError(
+                    f"Unknown category '{cat}' for dummy embedding; "
+                    f"expected 'correct', 'incorrect', or 'irrelevant'."
+                )
+            cat_rows[cat].append([value])
+
+    for cat, rows in cat_rows.items():
+        category_data[cat]['x'] = np.array(rows) if rows else np.empty((0, 1))
 
     return category_data
 
@@ -276,5 +337,49 @@ def build_category_data(
                 f"KSG reliable up to d={d_conservative} dims.",
                 UserWarning
             )
+
+    return category_data
+
+
+def build_category_data_dummy_embedding(
+    raw,
+    ts_tokenizer,
+    horizon_steps  = 1,
+    lookback_steps = 16,
+    patch_len      = 8,
+    seed           = 0,
+):
+    """
+    Same pipeline as build_category_data, but 'x' is a synthetic oracle
+    embedding (see _attach_dummy_embeddings) instead of a real text
+    tokenizer's output. embed_dim is always 1, so no PCA/dim-reduction
+    step is needed on the resulting category_data before feeding it to
+    the metrics.
+
+    Parameters
+    ----------
+    raw          : dict from load_split()
+    ts_tokenizer : time-series tokenizer, same as build_category_data
+    seed         : seeds the RNG used to pick 'incorrect' values
+
+    Returns
+    -------
+    {category: {'ts': (N, n_patches), 'y': (N, H), 'x': (N, 1)}}
+    """
+    rng = np.random.default_rng(seed)
+
+    pre_lead_steps = raw.get('metadata', {}).get('pre_lead_steps', 0)
+    if pre_lead_steps > 0:
+        horizon_steps = pre_lead_steps
+
+    data = dict(raw)
+    data['points'] = [dict(pt) for pt in raw['points']]
+
+    data          = _attach_lookback_and_future(
+                        data, horizon_steps, lookback_steps, ts_tokenizer)
+    categories = list(dict.fromkeys(x['category'] for x in data['points']))
+    category_data = _build_category_data(data, categories)
+    category_data = _attach_dummy_embeddings(data, category_data, rng)
+    category_data = _finalise(category_data)
 
     return category_data

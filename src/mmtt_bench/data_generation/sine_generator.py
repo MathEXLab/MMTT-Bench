@@ -170,9 +170,21 @@ def _find_transition_annotations(constant_mask: np.ndarray, indices: np.ndarray)
             before_recovery.append(j)
             seen_recovery.add(j)
 
-    for drop, recovery in zip(before_drop, before_recovery):
-        for j in np.arange(drop, recovery, 1):
-            before_drop.append(j)
+    # Also mark annotations inside each constant segment as drops: for every
+    # drop, fill up to (excluding) the next recovery after it, so the
+    # recovery-adjacent annotation keeps its recovery label.  Pair each drop
+    # with the *next* recovery rather than zipping positionally — a segment
+    # already constant at t=0 yields a recovery with no preceding drop, which
+    # would misalign a positional pairing.
+    recoveries_sorted = sorted(before_recovery)
+    for drop in list(before_drop):
+        recovery = next((r for r in recoveries_sorted if r > drop), None)
+        if recovery is None:
+            continue
+        for j in range(drop + 1, recovery):
+            if j not in seen_drop:
+                before_drop.append(j)
+                seen_drop.add(j)
 
     return before_drop, before_recovery
 

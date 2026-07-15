@@ -276,7 +276,6 @@ def print_correlations(
                     continue
                 mask   = df[info_m].notna() & df[perf_m].notna()
                 x_vals = df.loc[mask, info_m].values
-                x_vals = df.loc[mask, f"{info_m}_std"].values
                 y_vals = df.loc[mask, perf_m].values
                 if len(x_vals) < 3:
                     continue

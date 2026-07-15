@@ -159,6 +159,10 @@ MODEL_MARKERS = {
     'cfa':                     '*',
     'gating':                  'P',
     'orthogonal':              'X',
+    # LLM models
+    'TimeLLM': '^',
+    'GPT4MTS':   'o',
+    'DirectPrompt':   'D',
 }
 
 MODEL_COLORS = {
@@ -233,6 +237,10 @@ MODEL_LINESTYLES = {
     'cfa':                     (0, (3, 1, 1, 1)),
     'gating':                  (0, (5, 1, 1, 1)),
     'orthogonal':              (0, (3, 3)),
+    # LLM
+    'TimeLLM': '-',
+    'GPT4MTS':   '--',
+    'DirectPrompt':   ':',
 }
 
 INFO_LINESTYLES = {
@@ -661,7 +669,7 @@ def plot_correlation_trends(
                    markersize=9, label=CAT_LABELS['no_text'])
         )
     fig.legend(handles=model_legend, loc='outside lower center',
-               bbox_to_anchor=(0.35, -0.2), ncol=max(1, len(tables)//4), handlelength=3,
+               bbox_to_anchor=(0.35, -0.2), ncol=max(3, len(tables)//4), handlelength=3,
                #bbox_to_anchor=(0.35, -0.15), ncol=max(1, len(tables)//3), handlelength=3,
                title=f'Model (trend line style) with baseline {PERF_METRIC_LABEL.get(perf_metric, perf_metric)}')
     fig.legend(handles=cat_legend, loc='outside lower center',

@@ -51,6 +51,11 @@ sys.path.insert(0, str(_MMTSF))
 sys.path.insert(0, str(_CFA))
 
 
+# Oracle values used by the MI pipeline's dummy embeddings
+# (mmtt_bench.data._DUMMY_VALID_VALUES) — the sine annotations take these values.
+_DUMMY_VALID_VALUES = (-1.0, -0.5, 0.0, 1.0)
+
+
 # MLP  (identical to CFA exp_long_term_forecasting_text_integrated.py)
 class MLP(nn.Module):
     def __init__(self, layer_sizes: list[int], dropout_rate: float = 0.3):
@@ -167,6 +172,13 @@ def encode_text(
         → MLP(d_llm → d_llm/8 → text_emb)  [per token]
         → avg/max pool over tokens           [B, text_emb]
     """
+    if llm_model is None:
+        # Dummy oracle mode: texts are stringified oracle scalars produced by
+        # MmttDataset(dummy_embedding=True); mlp is Linear(1 → text_emb).
+        vals = torch.tensor([[float(t)] for t in texts],
+                            dtype=torch.float32, device=device)
+        return mlp(vals)
+
     prompt = [
         # f"<|start_prompt|Make predictions about the future based on "
         # f"the following information: {t}<|<end_prompt>|>"
@@ -314,6 +326,12 @@ class MmttDataset(torch.utils.data.Dataset):
     categories: list of categories to include, e.g. ['correct'].  None = all.
     scaler    : pre-fitted StandardScaler to use (pass train scaler for val).
                 If None and flag='train', a new scaler is fitted here.
+    dummy_embedding : replace each text with a stringified 1-D oracle value,
+                mirroring mmtt_bench.data._attach_dummy_embeddings:
+                correct → true first future value, incorrect → random value
+                from dummy_valid_values excluding the true one, irrelevant → 0.
+                encode_text() detects this mode (llm_model=None) and maps the
+                scalar through Linear(1 → pred_len) instead of the LLM.
     """
 
     def __init__(
@@ -325,6 +343,9 @@ class MmttDataset(torch.utils.data.Dataset):
         categories: list[str] | None = None,
         scale:      bool = True,
         scaler=None,
+        dummy_embedding: bool = False,
+        dummy_seed:      int = 0,
+        dummy_valid_values: list[float] | None = None,
     ):
         import json
         from sklearn.preprocessing import StandardScaler
@@ -336,7 +357,7 @@ class MmttDataset(torch.utils.data.Dataset):
         dense_t  = [round(t, 4) for t in raw['metadata']['t']]
         n_dense  = len(dense_y)
 
-        lookbacks, futures, texts = [], [], []
+        lookbacks, futures, texts, cats = [], [], [], []
 
         for pt in raw['points']:
             if categories and pt.get('category') not in categories:
@@ -346,9 +367,10 @@ class MmttDataset(torch.utils.data.Dataset):
                 continue
             idx = dense_t.index(t_i)
 
-            # Lookback: seq_len steps ending just before the annotation point
-            start    = max(0, idx - seq_len)
-            lb       = dense_y[start:idx]
+            # Lookback: seq_len steps ending at the annotation point inclusive
+            # (matches Dataset_Custom sliding windows and data.py)
+            start    = max(0, idx + 1 - seq_len)
+            lb       = dense_y[start:idx + 1]
             if len(lb) < seq_len:                    # left-pad with first value
                 lb = np.concatenate([np.full(seq_len - len(lb), lb[0] if len(lb) else 0.0), lb])
             lb = lb[-seq_len:]
@@ -367,6 +389,7 @@ class MmttDataset(torch.utils.data.Dataset):
             lookbacks.append(lb)
             futures.append(fut)
             texts.append(text)
+            cats.append(pt.get('category'))
 
         if not lookbacks:
             raise ValueError(f'No samples found in {json_path} '
@@ -385,6 +408,29 @@ class MmttDataset(torch.utils.data.Dataset):
             lb_arr  = scaler.transform(lb_arr.reshape(-1, 1)).reshape(lb_arr.shape)
             fut_arr = scaler.transform(fut_arr.reshape(-1, 1)).reshape(fut_arr.shape)
         self.scaler = scaler  # None when scale=False
+
+        # Dummy oracle embeddings (mirrors mmtt_bench.data._attach_dummy_embeddings):
+        # replace texts with a stringified scalar derived from the sample's own
+        # future in the dataset's working scale (raw when scale=False).
+        if dummy_embedding:
+            rng   = np.random.default_rng(dummy_seed)
+            valid = tuple(dummy_valid_values) if dummy_valid_values else _DUMMY_VALID_VALUES
+            oracle: list[float] = []
+            for cat, fut0 in zip(cats, fut_arr[:, 0]):
+                if cat == 'irrelevant':
+                    v = 0.0
+                elif cat == 'correct':
+                    v = float(fut0)
+                elif cat == 'incorrect':
+                    choices = [c for c in valid if not np.isclose(c, fut0)]
+                    v = float(rng.choice(choices))
+                else:
+                    raise ValueError(
+                        f"Unknown category '{cat}' for dummy embedding; "
+                        f"expected 'correct', 'incorrect', or 'irrelevant'."
+                    )
+                oracle.append(v)
+            texts = [repr(v) for v in oracle]
 
         # data_x: [N, seq_len, 1]
         self.data_x = lb_arr[:, :, np.newaxis]
@@ -441,6 +487,9 @@ def get_mmtt_dataset_and_loader(
     categories: list[str] | None = None,
     scale:      bool = True,
     train_scaler=None,
+    dummy_embedding: bool = False,
+    dummy_seed:      int = 0,
+    dummy_valid_values: list[float] | None = None,
 ) -> tuple:
     """
     Build a MmttDataset and DataLoader for the requested split.
@@ -458,6 +507,9 @@ def get_mmtt_dataset_and_loader(
         categories = categories,
         scale      = scale,
         scaler     = train_scaler,
+        dummy_embedding    = dummy_embedding,
+        dummy_seed         = dummy_seed,
+        dummy_valid_values = dummy_valid_values,
     )
     shuffle = (flag == 'train')
     loader  = DataLoader(ds, batch_size=batch_size, shuffle=shuffle, drop_last=False)
@@ -724,16 +776,27 @@ def main() -> None:
         if not all_datasets:
             raise ValueError(f"Dataset '{args.dataset}' not found in YAML.")
 
-    # ── load LLM once ─────────────────────────────────────────────────────
-    print(f'Loading text encoder: {llm_model_name} ({llm_layers} layers) ...')
-    tokenizer, llm_model_obj, d_llm = load_text_encoder(
-        llm_model_name, llm_layers, device
-    )
-    print(f'  d_llm={d_llm}')
+    data_format    = cfg_yaml.get('data_format', 'mmtsf')  # 'mmtsf' | 'mmtt'
+    embedding_type = cfg_yaml.get('embedding_type', 'llm')  # 'llm' | 'dummy'
+    dummy_seed     = cfg_yaml.get('dummy_seed', 0)
+    dummy_valid_values = cfg_yaml.get('dummy_valid_values')
+
+    # ── load LLM once (skipped for dummy oracle embeddings) ──────────────
+    if embedding_type == 'dummy':
+        if data_format != 'mmtt':
+            raise ValueError("embedding_type: dummy requires data_format: mmtt "
+                             "(oracle values come from annotation-point futures).")
+        print('Text encoder: dummy oracle embeddings (no LLM loaded)')
+        tokenizer, llm_model_obj, d_llm = None, None, 1
+    else:
+        print(f'Loading text encoder: {llm_model_name} ({llm_layers} layers) ...')
+        tokenizer, llm_model_obj, d_llm = load_text_encoder(
+            llm_model_name, llm_layers, device
+        )
+        print(f'  d_llm={d_llm}')
 
     all_results: dict = {}  # {compound_key: metrics}
 
-    data_format   = cfg_yaml.get('data_format', 'mmtsf')  # 'mmtsf' | 'mmtt'
     BASELINE_MODE = 'unimodal'
     non_baseline_modes = [m for m in modes_to_run if m != BASELINE_MODE]
 
@@ -769,12 +832,18 @@ def main() -> None:
                         train_ds, train_loader = get_mmtt_dataset_and_loader(
                             train_json, val_json, 'train',
                             seq_len, label_len, pred_len, batch_size,
-                            [text_cond], scale=scale_data)
+                            [text_cond], scale=scale_data,
+                            dummy_embedding=(embedding_type == 'dummy'),
+                            dummy_seed=dummy_seed,
+                            dummy_valid_values=dummy_valid_values)
                         val_ds, val_loader = get_mmtt_dataset_and_loader(
                             train_json, val_json, 'val',
                             seq_len, label_len, pred_len, batch_size,
                             [text_cond], scale=scale_data,
-                            train_scaler=train_ds.scaler)
+                            train_scaler=train_ds.scaler,
+                            dummy_embedding=(embedding_type == 'dummy'),
+                            dummy_seed=dummy_seed,
+                            dummy_valid_values=dummy_valid_values)
                     else:
                         root_path = ds_info['root_path']
                         data_path = ds_info['data_path']
@@ -806,8 +875,14 @@ def main() -> None:
                         )
                         for seed in args.seeds:
                             _set_seed(seed)
-                            mlp_run = MLP([d_llm, d_llm // 8, pred_len],
-                                          dropout_rate=0.3).to(device)
+                            # Dummy mode: oracle scalar → Linear(1, pred_len);
+                            # LLM mode: CFA MLP with d_llm/8 bottleneck.
+                            mlp_run = (
+                                MLP([1, pred_len], dropout_rate=0.0)
+                                if embedding_type == 'dummy'
+                                else MLP([d_llm, d_llm // 8, pred_len],
+                                         dropout_rate=0.3)
+                            ).to(device)
                             try:
                                 m = train_one_setting(
                                     model_name=model_name, cfg=cfg,
