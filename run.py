@@ -45,8 +45,14 @@ Config format (see example_config.yaml for full reference):
 
 import argparse
 import json
+import os
 from copy import deepcopy
 from pathlib import Path
+
+# Cap OpenBLAS threads before any numpy/scipy import to prevent segfaults on
+# machines with >128 cores (OpenBLAS's compiled maximum).
+for _blas_var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_blas_var, "64")
 
 import numpy as np
 import yaml
@@ -113,34 +119,50 @@ def _parse_metrics(cfg: dict) -> dict:
 
 def _build_category_data(cfg: dict):
     """Build category_data from config — expensive (loads model)."""
-    from src.mmtt_bench.data import build_category_data, load_split, shuffle_text_annotations
+    from src.mmtt_bench.data import (
+        build_category_data, build_category_data_dummy_embedding,
+        load_split, shuffle_text_annotations,
+    )
     from src.mmtt_bench.tokenizers import TEXT_TOKENIZERS, TS_TOKENIZERS
 
     raw            = load_split(cfg["data_path"])
     embedding_type = cfg.get("embedding_type", "sentence_transformer")
-    model_name     = cfg.get("model_name", _DEFAULTS["model_name"])
-    if embedding_type == "llm":
-        text_tok = TEXT_TOKENIZERS[embedding_type](
-            model_name,
-            device     = cfg.get("device",         _DEFAULTS["device"]),
-            batch_size = cfg.get("llm_batch_size", _DEFAULTS["llm_batch_size"]),
-        )
-    else:
-        text_tok = TEXT_TOKENIZERS[embedding_type](model_name)
     ts_tok = TS_TOKENIZERS[cfg.get("ts_tokenizer", "identity")](
         patch_len      = cfg.get("patch_len",      _DEFAULTS["patch_len"]),
         stride         = cfg.get("stride",         _DEFAULTS["stride"]),
         lookback_steps = cfg.get("lookback_steps", _DEFAULTS["lookback_steps"]),
     ).build()
 
-    category_data = build_category_data(
-        raw,
-        text_tokenizer = text_tok,
-        ts_tokenizer   = ts_tok,
-        horizon_steps  = cfg.get("horizon_steps",  _DEFAULTS["horizon_steps"]),
-        lookback_steps = cfg.get("lookback_steps", _DEFAULTS["lookback_steps"]),
-        patch_len      = cfg.get("patch_len",      _DEFAULTS["patch_len"]),
-    )
+    if embedding_type == "dummy":
+        # Oracle 1-D embedding derived from the true y_future value instead
+        # of a real text tokenizer — see build_category_data_dummy_embedding.
+        category_data = build_category_data_dummy_embedding(
+            raw,
+            ts_tokenizer   = ts_tok,
+            horizon_steps  = cfg.get("horizon_steps",  _DEFAULTS["horizon_steps"]),
+            lookback_steps = cfg.get("lookback_steps", _DEFAULTS["lookback_steps"]),
+            patch_len      = cfg.get("patch_len",      _DEFAULTS["patch_len"]),
+            seed           = cfg.get("dummy_seed", 0),
+        )
+    else:
+        model_name = cfg.get("model_name", _DEFAULTS["model_name"])
+        if embedding_type == "llm":
+            text_tok = TEXT_TOKENIZERS[embedding_type](
+                model_name,
+                device     = cfg.get("device",         _DEFAULTS["device"]),
+                batch_size = cfg.get("llm_batch_size", _DEFAULTS["llm_batch_size"]),
+            )
+        else:
+            text_tok = TEXT_TOKENIZERS[embedding_type](model_name)
+
+        category_data = build_category_data(
+            raw,
+            text_tokenizer = text_tok,
+            ts_tokenizer   = ts_tok,
+            horizon_steps  = cfg.get("horizon_steps",  _DEFAULTS["horizon_steps"]),
+            lookback_steps = cfg.get("lookback_steps", _DEFAULTS["lookback_steps"]),
+            patch_len      = cfg.get("patch_len",      _DEFAULTS["patch_len"]),
+        )
 
     if cfg.get("shuffle", False):
         print("  [shuffle] Shuffling text annotations to random time points ...")

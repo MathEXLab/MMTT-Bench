@@ -17,6 +17,7 @@ CAT_COLORS = {
     'correct':              '#1D9E75',  # teal-green
     'incorrect':            '#D85A30',  # red-orange
     'irrelevant':           '#7F8C8D',  # grey
+    'synergy':              '#8E44AD',  # purple
     'no_text':              '#4A90D9',  # steel blue — time series only baseline
     # incorrect mixtures: bright teal → golden-yellow → amber
     'mixture_25_incorrect': '#2EC49A',  # bright teal   (75% correct, 25% incorrect)
@@ -61,7 +62,7 @@ METRIC_LABELS = {
 # The submetric key that represents "unique text contribution" for each metric family.
 CONDITIONAL_KEY = {
     "mutual_information": "conditional",
-    "pid":                "unique_text",
+    "pid":                "unique_text", # synergy
     "v_information":      "v_conditional",
     "mine": "conditional",
     "infonce": "conditional",
@@ -124,27 +125,122 @@ PERF_METRIC_LABEL = {
 }
 
 MODEL_MARKERS = {
+    # sklearn baselines
     'ridge': '^',
     'mlp':   'o',
     'svr':   'X',
     'gbr':   'D',
     'rf':    '*',
+    'knn':   'P',
+    # Transformer backbone models (TaTS + CFA)
+    'Autoformer':              's',
+    'Crossformer':             'p',
+    'DLinear':                 'h',
+    'FEDformer':               'H',
+    'FiLM':                    'v',
+    'Informer':                '<',
+    'PatchTST':                '>',
+    'Transformer':             '1',
+    'iTransformer':            '2',
+    'Reformer':                '3',
+    'TSMixer':                 '4',
+    'TiDE':                    '8',
+    'Nonstationary_Transformer': 'd',
+    # CFA fusion methods — naive additive  (triangles)
+    'first-additive':          '^',
+    'middle-additive':         'v',
+    'last-additive':           '<',
+    # CFA fusion methods — naive concat  (polygons)
+    'first-concat':            '>',
+    'middle-concat':           's',
+    'last-concat':             'p',
+    # CFA fusion methods — constrained  (special shapes)
+    'film':                    'D',
+    'cfa':                     '*',
+    'gating':                  'P',
+    'orthogonal':              'X',
+    # LLM models
+    'TimeLLM': '^',
+    'GPT4MTS':   'o',
+    'DirectPrompt':   'D',
 }
 
 MODEL_COLORS = {
+    # sklearn baselines
     'ridge': '#1f77b4',
     'mlp':   '#ff7f0e',
     'svr':   '#9deb30',
     'gbr':   '#e429bf',
     'rf':    '#9467bd',
+    'knn':   '#8c564b',
+    # Transformer backbone models (TaTS + CFA)
+    'Autoformer':              '#d62728',
+    'Crossformer':             '#e377c2',
+    'DLinear':                 '#17becf',
+    'FEDformer':               '#bcbd22',
+    'FiLM':                    '#7f7f7f',
+    'Informer':                '#aec7e8',
+    'PatchTST':                '#ffbb78',
+    'Transformer':             '#98df8a',
+    'iTransformer':            '#ff9896',
+    'Reformer':                '#2ecc71',
+    'TSMixer':                 '#3498db',
+    'TiDE':                    '#e74c3c',
+    'Nonstationary_Transformer': '#9b59b6',
+    # CFA fusion methods — naive additive
+    'first-additive':          '#e67e22',
+    'middle-additive':         '#d35400',
+    'last-additive':           '#f39c12',
+    # CFA fusion methods — naive concat
+    'first-concat':            '#2980b9',
+    'middle-concat':           '#1abc9c',
+    'last-concat':             '#16a085',
+    # CFA fusion methods — constrained
+    'film':                    '#27ae60',
+    'cfa':                     '#c0392b',
+    'gating':                  '#8e44ad',
+    'orthogonal':              '#2c3e50',
 }
 
 MODEL_LINESTYLES = {
+    # sklearn baselines
     'ridge': '-',
     'mlp':   '--',
     'svr':   '-.',
     'gbr':   ':',
     'rf':    (0, (3, 1, 1, 1)),
+    'knn':   (0, (5, 2)),
+    # Transformer backbone models (TaTS + CFA)
+    'Autoformer':              (0, (5, 5)),
+    'Crossformer':             (0, (1, 1)),
+    'DLinear':                 (0, (5, 1)),
+    'FEDformer':               (0, (3, 5, 1, 5)),
+    'FiLM':                    (0, (1, 5)),
+    'Informer':                (0, (3, 1, 1, 1, 1, 1)),
+    'PatchTST':                (0, (5, 2, 1, 2)),
+    'Transformer':             (0, (3, 3)),
+    'iTransformer':            (0, (1, 2, 5, 2)),
+    'Reformer':                (0, (4, 2, 4, 2)),
+    'TSMixer':                 (0, (2, 2)),
+    'TiDE':                    (0, (6, 2)),
+    'Nonstationary_Transformer': (0, (4, 1, 1, 1, 1, 1)),
+    # CFA fusion methods — naive additive  (solid/dashed/dash-dot)
+    'first-additive':          '-',
+    'middle-additive':         '--',
+    'last-additive':           '-.',
+    # CFA fusion methods — naive concat  (dense dot patterns)
+    'first-concat':            ':',
+    'middle-concat':           (0, (5, 2)),
+    'last-concat':             (0, (5, 5)),
+    # CFA fusion methods — constrained  (complex dash patterns)
+    'film':                    (0, (1, 1)),
+    'cfa':                     (0, (3, 1, 1, 1)),
+    'gating':                  (0, (5, 1, 1, 1)),
+    'orthogonal':              (0, (3, 3)),
+    # LLM
+    'TimeLLM': '-',
+    'GPT4MTS':   '--',
+    'DirectPrompt':   ':',
 }
 
 INFO_LINESTYLES = {
@@ -405,7 +501,7 @@ def plot_info_vs_delta(
                            edgecolors=CAT_COLORS.get(cat, "#888"),
                            zorder=3, s=150,
                            label=CAT_LABELS.get(cat, cat),
-                           marker=MODEL_MARKERS[model_name])
+                           marker=MODEL_MARKERS.get(model_name, 'o'))
                 if _row == 1:
                     ax.annotate(CAT_LABELS.get(cat, cat), (x_val, y_val),
                                 textcoords="offset points", xytext=(6, 4),
@@ -421,15 +517,18 @@ def plot_info_vs_delta(
                 ax.spines[sp].set_visible(False)
 
     fig.suptitle(title, fontweight="normal", y=1.01)
+    def _score_label(m):
+        s = scores_dict.get(m)
+        return f"{m}  score={round(s, 4)}" if s is not None else m
     model_legend = [
         Line2D([0], [0], marker=MODEL_MARKERS[m], color='black',
-               label=f"{m} R²={round(scores_dict[m], 2)}",
+               label=_score_label(m),
                markerfacecolor='w', markersize=10)
         for m in MODEL_MARKERS if m in scores_dict
     ]
     fig.legend(handles=model_legend, handlelength=0, loc='outside lower center',
                bbox_to_anchor=(0.5, -0.15), ncol=6,
-               title='Model architectures with baseline R² (time series only)')
+               title='Model / fusion method with baseline score (time series only)')
     plt.tight_layout()
     _save_or_show(save_path)
 
@@ -528,6 +627,8 @@ def plot_correlation_trends(
         pad = (max(all_ys_global) - min(all_ys_global)) * 0.08 or 0.05
         for ax in drawn_axes:
             ax.set_ylim(min(all_ys_global) - pad, max(all_ys_global) + pad)
+            # hard coding sometimes:
+            #ax.set_ylim(0, 5000000000)
 
     # Time-series-only baseline: scatter point at x=0 per model, per panel
     if show_ts_only:
@@ -543,12 +644,15 @@ def plot_correlation_trends(
                            zorder=4, s=150,
                            marker=MODEL_MARKERS.get(model_name, 'o'))
 
+    def _score_label(m):
+        s = scores_dict.get(m)
+        return f"{m}  score={round(s, 4)}" if s is not None else m
     model_legend = [
         Line2D([0], [0], color='black',
                linestyle=MODEL_LINESTYLES.get(m, '-'),
                marker=MODEL_MARKERS.get(m, 'o'), markerfacecolor='w',
                markersize=9, lw=1.8,
-               label=f"{m} R²={round(scores_dict[m], 2)}")
+               label=_score_label(m))
         for m in tables if m in scores_dict
     ]
     cat_legend = [
@@ -565,10 +669,12 @@ def plot_correlation_trends(
                    markersize=9, label=CAT_LABELS['no_text'])
         )
     fig.legend(handles=model_legend, loc='outside lower center',
-               bbox_to_anchor=(0.35, -0.15), ncol=len(tables), handlelength=3,
-               title='Model (trend line style) with baseline R²')
+               bbox_to_anchor=(0.35, -0.2), ncol=max(3, len(tables)//4), handlelength=3,
+               #bbox_to_anchor=(0.35, -0.15), ncol=max(1, len(tables)//3), handlelength=3,
+               title=f'Model (trend line style) with baseline {PERF_METRIC_LABEL.get(perf_metric, perf_metric)}')
     fig.legend(handles=cat_legend, loc='outside lower center',
-               bbox_to_anchor=(0.85, -0.15), ncol=1, title='Category (point colour)')
+               bbox_to_anchor=(0.88, -0.18),#bbox_to_anchor=(0.85, -0.15), 
+               ncol=1, title='Category (point colour)')
     plt.tight_layout()
     _save_or_show(save_path)
 

@@ -1,0 +1,119 @@
+# sine_llm.yaml
+# TimeLLM / GPT4MTS on the mmtt-bench synthetic sine benchmark.
+#
+# Two dataset variants:
+#   sine         — benchmark_splits/  (correct | incorrect | irrelevant)
+#   sine_synergy — sine_synergy/      (correct | incorrect | irrelevant | synergy)
+#
+# Key differences from timemmd_llm.yaml:
+#   scale_data:  false  — sine values are already in [-1, 1]; no StandardScaler
+#   learning_rate: 1e-3 — matches train_transformer.py convention (10× higher
+#                         than TimeMMD; smaller datasets train better at 1e-3)
+#   train_epochs:  30   — matches train_transformer.py default
+#   pred_lengths: [1]   — single-step-ahead (the standard sine task)
+#
+# Note: the synergy category ("Regime A" / "Regime B" labels) is included for
+# sine_synergy. These short regime labels test whether the LLM can exploit
+# non-causal regime information that is invisible in the TS alone.
+
+# ── LLM backbone ──────────────────────────────────────────────────────────────
+llm_model: GPT2   # GPT2 (d_llm=768) | LLAMA3 (d_llm=4096, requires HF auth)
+
+# ── TimeLLM-specific ──────────────────────────────────────────────────────────
+d_model:  64     # patch embedding intermediate dim; smaller than TimeMMD
+                 # because sine sequences are very short (seq_len=8)
+n_heads:  8      # reprogramming attention heads (must divide d_llm=768)
+n_tokens: 64     # learned prototypes; reduced from 100 for short sequences
+
+# ── Shared hyperparameters ────────────────────────────────────────────────────
+dropout:  0.1
+
+# ── Training ──────────────────────────────────────────────────────────────────
+train_epochs:   30
+patience:       5
+batch_size:     32
+learning_rate:  0.001   # 1e-3, consistent with train_transformer.py on sine
+scale_data:     false   # sine already in [-1, 1]; RevIN inside the model handles
+                        # per-instance normalisation on top of this
+
+# ── Models to run ─────────────────────────────────────────────────────────────
+# LLM-backbone (trained): TimeLLM, GPT4MTS
+# Zero-shot (text generation): LLMTime, PromptCast
+models:
+  - TimeLLM
+  - GPT4MTS
+  - LLMTime
+  - PromptCast
+
+# ── Generative LLM for zero-shot models ───────────────────────────────────────
+generative_llm:
+  model_name: GPT2
+
+# ── LLMTime hyperparameters ───────────────────────────────────────────────────
+# Sine values are in [-1, 1] so max_val=2 is sufficient (no scaling for LLMTime
+# either — wait, LLMTime DOES use quantile scaling even for sine data).
+llmtime:
+  n_samples: 10
+  prec:      3
+  temp:      0.7
+  alpha:     0.95
+  beta:      0.3
+  max_val:   10.0
+
+# ── PromptCast hyperparameters ────────────────────────────────────────────────
+# scale_data is false for sine, so PromptCast sees raw [-1, 1] values.
+# max_val=2 is sufficient; using 10 gives some headroom.
+promptcast:
+  n_samples: 10
+  prec:      3
+  temp:      0.8
+  max_val:   10.0
+
+# ── Domain prompt ─────────────────────────────────────────────────────────────
+# A single shared prompt for all sine datasets. The synthetic nature of the
+# signal is described so the LLM understands the domain.
+# Text annotations in this benchmark are natural-language descriptions of the
+# local behaviour at each annotation point (direction and magnitude of change),
+# generated programmatically from the ground-truth signal derivative.
+domain_prompts:
+  sine: >-
+    This time series is a synthetic sinusoidal signal with values bounded in
+    the range [-1, 1]. The signal exhibits smooth periodic oscillations. Each
+    annotation describes the expected local behaviour of the sine curve at the
+    prediction point — specifically the direction (ascending or descending) and
+    the magnitude (sharply, gradually, etc.) of the upcoming change.
+    Forecast the next value of this sinusoidal time series.
+
+  sine_synergy: >-
+    This time series is a synthetic sinusoidal signal with values bounded in
+    the range [-1, 1]. The signal can be in one of two regimes (A or B) which
+    differ in frequency or phase. Each annotation either describes the expected
+    local behaviour at the prediction point or identifies the current regime.
+    Regime information is not directly observable from the time series lookback
+    window alone, making it a source of synergistic information.
+    Forecast the next value of this sinusoidal time series.
+
+# ── Datasets ──────────────────────────────────────────────────────────────────
+datasets:
+  - name:       sine
+    train_json: datasets/benchmark_splits/train.json
+    val_json:   datasets/benchmark_splits/val.json
+    freq:       synthetic
+
+  - name:       sine_synergy
+    train_json: datasets/sine_synergy/train.json
+    val_json:   datasets/sine_synergy/val.json
+    freq:       synthetic
+
+# ── Frequency settings ────────────────────────────────────────────────────────
+# synthetic: matches the sine benchmark (lookback_steps=2 padded to
+# TRANSFORMER_MIN_LOOKBACK=8, single step ahead).
+# patch_len=2, stride=1 → (8-2)//1 + 1 = 7 patches (same as monthly in
+# timemmd_llm.yaml, which has the same seq_len=8).
+freq_settings:
+  synthetic:
+    seq_len:      8
+    label_len:    4
+    pred_lengths: [1]
+    patch_len:    2
+    stride:       1

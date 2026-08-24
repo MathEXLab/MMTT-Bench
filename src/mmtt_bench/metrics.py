@@ -233,7 +233,7 @@ class MutualInformationMetric:
 
         cumvar = np.cumsum(pca_text.explained_variance_ratio_)
 
-        for cat, vals in category_data.items():
+        for cat_idx, (cat, vals) in enumerate(category_data.items()):
             x_pooled, X_ts, Y = pooled[cat]
             X_text  = pca_text.transform(x_pooled)[:, :pca_dim]
             X_joint = np.hstack([X_ts, X_text])
@@ -261,6 +261,10 @@ class MutualInformationMetric:
 
             # ── Variance via Holmes & Nemenman 1/N subsampling ────────────
             # Var(MI, n) = C/n. Estimate C at each subsample size, average.
+            # Reset to the same seed for every category so categories with
+            # identical data (e.g. bitcoin correct vs irrelevant TS) draw
+            # the same subsamples and produce identical variance estimates.
+            cat_rng = np.random.default_rng(self.seed)
             C_estimates: dict[str, list] = {m: [] for m in metrics}
 
             for frac in self._SUBSAMPLE_FRACS:
@@ -269,7 +273,7 @@ class MutualInformationMetric:
                     continue
                 sub_vals: dict[str, list] = {m: [] for m in metrics}
                 for _ in range(self.n_subsample_reps):
-                    idx   = rng.choice(N, size=sub_n, replace=False)
+                    idx   = cat_rng.choice(N, size=sub_n, replace=False)
                     mi_t  = ksg_mi(X_text[idx],  Y[idx], self.n_neighbours)
                     mi_s  = ksg_mi(X_ts[idx],    Y[idx], self.n_neighbours)
                     mi_j  = ksg_mi(X_joint[idx], Y[idx], self.n_neighbours)
@@ -373,7 +377,7 @@ class PIDMetric:
             return kbd.fit_transform(Y.reshape(-1,1)).ravel().astype(int)
         elif strategy == 'discrete':
             # we know values are close to 1,0,-5,-1
-            midpoints = [1.2, 0.2, -0.2, -0.7, -1.2]
+            midpoints = [1.2, 0.7, 0.2, -0.2, -0.7, -1.2]
             # np.digitize returns 0-indexed bin IDs (0 to 3)
             bin_indices = np.digitize(Y, midpoints)
             return bin_indices
@@ -471,7 +475,7 @@ class PIDMetric:
         _rus  = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_rus)
 
-        for cat in category_data:
+        for cat_idx, cat in enumerate(category_data):
             x_pooled, X_ts, Y = pooled[cat]
             X_text = pca_text.transform(x_pooled)[:, :pca_dim]
 
@@ -481,13 +485,16 @@ class PIDMetric:
             y_full  = y_disc_per_cat[cat]
             n       = len(x1_full)
 
+            # Reset to the same seed for every category so categories with
+            # identical data produce identical estimates regardless of order.
+            cat_rng = np.random.default_rng(self.seed)
             cat_samples: dict[str, list] = {k: [] for k in pid_keys}
 
             for b in range(n_bootstrap):
                 if n_bootstrap == 1:
                     idx = np.arange(n)
                 else:
-                    idx = rng.integers(0, n, size=n)
+                    idx = cat_rng.integers(0, n, size=n)
 
                 P, _ = _rus.convert_data_to_distribution(
                     x1_full[idx], x2_full[idx], y_full[idx]
@@ -658,7 +665,7 @@ class VInformationMetric:
 
         cumvar = np.cumsum(pca_text.explained_variance_ratio_)
 
-        for cat in category_data:
+        for cat_idx, cat in enumerate(category_data):
             x_pooled, X_ts, Y = pooled[cat]
             X_text  = pca_text.transform(x_pooled)[:, :pca_dim]
             X_joint = np.hstack([X_ts, X_text])
@@ -669,8 +676,12 @@ class VInformationMetric:
             d_conservative = int(np.sqrt(N / 2))
             d_liberal      = N // 5
 
+            # Reset to the same seed for every category so categories with
+            # identical data produce identical estimates regardless of order.
+            cat_rng = np.random.default_rng(self.seed)
+
             for _ in range(self.n_bootstrap):
-                idx = rng.choice(N, size=N, replace=True)
+                idx = cat_rng.choice(N, size=N, replace=True)
 
                 r2_text  = self._r2(X_text,  Y, rng, idx)
                 r2_ts    = self._r2(X_ts,    Y, rng, idx)
@@ -871,7 +882,7 @@ class MINEMetric:
         import time as _time
         _mine_times = []
 
-        for cat, vals in category_data.items():
+        for cat_idx, (cat, vals) in enumerate(category_data.items()):
             x_pooled, X_ts, Y = pooled[cat]
             X_text  = pca_text.transform(x_pooled)[:, :pca_dim]
             X_joint = np.hstack([X_ts, X_text])
@@ -880,9 +891,13 @@ class MINEMetric:
             d_conservative = int(np.sqrt(N / 2))
             d_liberal      = N // 5
 
+            # Reset to the same seed for every category so categories with
+            # identical data produce identical estimates regardless of order.
+            cat_rng = np.random.default_rng(self.seed)
+
             for b in range(self.n_bootstrap):
                 # For n_bootstrap=1 use all data; for >1 bootstrap resample
-                idx = (rng.choice(N, size=N, replace=True)
+                idx = (cat_rng.choice(N, size=N, replace=True)
                        if self.n_bootstrap > 1 else np.arange(N))
 
                 _t0 = _time.perf_counter()
@@ -1145,7 +1160,7 @@ class InfoNCEMetric:
         import time as _time
         _infonce_times = []
 
-        for cat in category_data:
+        for cat_idx, cat in enumerate(category_data):
             x_pooled, X_ts, Y = pooled[cat]
             X_text  = pca_text.transform(x_pooled)[:, :pca_dim]
             X_joint = np.hstack([X_ts, X_text])
@@ -1163,10 +1178,14 @@ class InfoNCEMetric:
                     UserWarning,
                 )
 
+            # Reset to the same seed for every category so categories with
+            # identical data produce identical estimates regardless of order.
+            cat_rng = np.random.default_rng(self.seed)
+
             for b in range(self.n_bootstrap):
                 # For n_bootstrap=1 use all data; otherwise bootstrap resample
                 if self.n_bootstrap > 1:
-                    idx    = rng.choice(N, size=N, replace=True)
+                    idx    = cat_rng.choice(N, size=N, replace=True)
                     x_text_b  = X_text[idx]
                     x_ts_b    = X_ts[idx]
                     x_joint_b = X_joint[idx]
@@ -1384,7 +1403,7 @@ class CCAMutualInformationMetric:
         results = {m: {c: [] for c in category_data} for m in all_metrics}
         cumvar  = np.cumsum(pca_text.explained_variance_ratio_)
 
-        for cat in category_data:
+        for cat_idx, cat in enumerate(category_data):
             x_pooled, X_ts, Y = pooled[cat]
             X_text  = pca_text.transform(x_pooled)[:, :pca_dim]
             X_joint = np.hstack([X_ts, X_text])
@@ -1407,8 +1426,12 @@ class CCAMutualInformationMetric:
                     UserWarning,
                 )
 
+            # Reset to the same seed for every category so categories with
+            # identical data produce identical estimates regardless of order.
+            cat_rng = np.random.default_rng(self.seed)
+
             for _ in range(self.n_bootstrap):
-                idx = rng.choice(N, size=N, replace=True)
+                idx = cat_rng.choice(N, size=N, replace=True)
 
                 mi_text  = self._cca_mi(X_text[idx],  Y_2d[idx])
                 mi_ts    = self._cca_mi(X_ts[idx],    Y_2d[idx])
@@ -1435,6 +1458,346 @@ class CCAMutualInformationMetric:
         return results
 
 # ---------------------------------------------------------------------------
+# DeepCCA
+# ---------------------------------------------------------------------------
+
+class DeepCCAMetric:
+    """
+    Deep Canonical Correlation Analysis (Andrew et al., ICML 2013) MI estimator.
+
+    Trains two MLP networks to find nonlinear projections H1 = f(X) and
+    H2 = g(Y) that maximise the sum of canonical correlations.  MI is then
+    estimated from the canonical correlations of the learned projections
+    under the Gaussian assumption:
+
+        I(X; Y) ≈ -0.5 * sum_k log(1 - rho_k^2)
+
+    Unlike linear CCA, the MLP projections can capture nonlinear
+    dependencies at the cost of training time.  The Gaussian MI formula
+    applies to the projected representations H1 and H2, not the raw inputs.
+
+    Architecture matches github: Michaelvll/DeepCCA:
+        Hidden layers: Linear → Sigmoid → BatchNorm1d(affine=False)
+        Output layer:  BatchNorm1d(affine=False) → Linear
+
+    Parameters
+    ----------
+    outdim_size             : latent dimension per view (number of CCA components)
+    layer_sizes             : hidden layer widths, e.g. [64, 32]
+    n_epochs                : training epochs
+    batch_size              : mini-batch size
+    lr                      : RMSprop learning rate
+    reg_par                 : weight decay (L2 regularisation)
+    use_all_singular_values : if True use trace(sqrt(T^T T)) in CCA loss;
+                              if False use top-outdim_size singular values
+    n_bootstrap             : bootstrap resamples (1 = point estimate only)
+    seed                    : rng seed
+
+    References
+    ----------
+    Andrew et al. (2013) "Deep Canonical Correlation Analysis." ICML.
+    """
+
+    def __init__(
+        self,
+        outdim_size:             int   = 4,
+        layer_sizes:             list  = None,
+        n_epochs:                int   = 100,
+        batch_size:              int   = 64,
+        lr:                      float = 1e-3,
+        reg_par:                 float = 1e-4,
+        use_all_singular_values: bool  = False,
+        n_bootstrap:             int   = 1,
+        seed:                    int   = 42,
+        **_kwargs,
+    ):
+        self.outdim_size             = outdim_size
+        self.layer_sizes             = layer_sizes if layer_sizes is not None else [64, 32]
+        self.n_epochs                = n_epochs
+        self.batch_size              = batch_size
+        self.lr                      = float(lr)       # guard: YAML may deliver as str '1e-3'
+        self.reg_par                 = float(reg_par)  # guard: YAML may deliver as str '1e-4'
+        self.use_all_singular_values = use_all_singular_values
+        self.n_bootstrap             = n_bootstrap
+        self.seed                    = seed
+
+    # ── MLP architecture ─────────────────────────────────────────────────
+
+    def _build_mlp(self, input_size: int, output_size: int):
+        """
+        Build a DeepCCA MLP.
+
+        Hidden layers: Linear → Sigmoid → BatchNorm1d(affine=False)
+        Output layer:  BatchNorm1d(affine=False) → Linear
+        """
+        import torch.nn as nn
+
+        sizes  = [input_size] + self.layer_sizes + [output_size]
+        layers = []
+        for i in range(len(sizes) - 1):
+            if i == len(sizes) - 2:   # output layer
+                layers += [nn.BatchNorm1d(sizes[i], affine=False),
+                           nn.Linear(sizes[i], sizes[i + 1])]
+            else:                     # hidden layers
+                layers += [nn.Linear(sizes[i], sizes[i + 1]),
+                           nn.Sigmoid(),
+                           nn.BatchNorm1d(sizes[i + 1], affine=False)]
+        return nn.Sequential(*layers).double()
+
+    # ── CCA loss ──────────────────────────────────────────────────────────
+
+    def _cca_loss(self, H1, H2):
+        """
+        Negative sum of (top-k) canonical correlations.
+
+        Implements objectives.py from Michaelvll/DeepCCA, updated to use
+        torch.linalg.eigh in place of the deprecated torch.symeig.
+        """
+        import torch
+
+        r1  = 1e-2   # 1e-3 triggers repeated-eigenvalue failures when outputs are near-constant
+        r2  = 1e-2
+        eps = 1e-9
+
+        H1t = H1.t()                    # (outdim, N)
+        H2t = H2.t()
+        o1  = H1t.shape[0]
+        o2  = H2t.shape[0]
+        m   = H1t.shape[1]
+
+        H1bar = H1t - H1t.mean(dim=1, keepdim=True)
+        H2bar = H2t - H2t.mean(dim=1, keepdim=True)
+
+        S12 = H1bar @ H2bar.t() / (m - 1)
+        S11 = (H1bar @ H1bar.t() / (m - 1)
+               + r1 * torch.eye(o1, dtype=H1.dtype, device=H1.device))
+        S22 = (H2bar @ H2bar.t() / (m - 1)
+               + r2 * torch.eye(o2, dtype=H1.dtype, device=H1.device))
+
+        try:
+            D1, V1 = torch.linalg.eigh(S11)
+            D2, V2 = torch.linalg.eigh(S22)
+        except torch.linalg.LinAlgError:
+            return torch.tensor(0.0, dtype=H1.dtype, device=H1.device,
+                                requires_grad=False)
+
+        pos1 = D1 > eps
+        pos2 = D2 > eps
+        D1, V1 = D1[pos1], V1[:, pos1]
+        D2, V2 = D2[pos2], V2[:, pos2]
+
+        S11_inv_sqrt = V1 @ torch.diag(D1 ** -0.5) @ V1.t()
+        S22_inv_sqrt = V2 @ torch.diag(D2 ** -0.5) @ V2.t()
+        T = S11_inv_sqrt @ S12 @ S22_inv_sqrt
+
+        if self.use_all_singular_values:
+            corr = torch.trace(
+                torch.sqrt(T.t() @ T + eps * torch.eye(T.shape[1], dtype=H1.dtype, device=H1.device))
+            )
+        else:
+            TtT = (T.t() @ T
+                   + r1 * torch.eye(T.shape[1], dtype=H1.dtype, device=H1.device))
+            U    = torch.linalg.eigvalsh(TtT).clamp(min=eps)
+            corr = U.topk(min(self.outdim_size, len(U)))[0].sqrt().sum()
+
+        return -corr
+
+    # ── Training ──────────────────────────────────────────────────────────
+
+    def _train_and_project(
+        self,
+        X:          np.ndarray,
+        Y:          np.ndarray,
+        torch_seed: int = 0,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Train two MLPs on (X, Y) to maximise CCA correlation.
+
+        Returns projected representations H1 = f(X), H2 = g(Y) evaluated on
+        the full dataset using the trained (eval-mode) networks.
+        """
+        import torch
+        import torch.optim as optim
+
+        torch.manual_seed(torch_seed)
+
+        N  = len(X)
+        dx = X.shape[1]
+        dy = Y.shape[1] if Y.ndim > 1 else 1
+        Y2 = Y if Y.ndim > 1 else Y.reshape(-1, 1)
+
+        # Standardise to stabilise BatchNorm
+        X_norm = (X  - X.mean(0))  / (X.std(0)  + 1e-8)
+        Y_norm = (Y2 - Y2.mean(0)) / (Y2.std(0) + 1e-8)
+
+        net1   = self._build_mlp(dx, self.outdim_size)
+        net2   = self._build_mlp(dy, self.outdim_size)
+        params = list(net1.parameters()) + list(net2.parameters())
+        opt    = optim.RMSprop(params, lr=self.lr, weight_decay=self.reg_par)
+
+        X_t = torch.tensor(X_norm, dtype=torch.float64)
+        Y_t = torch.tensor(Y_norm, dtype=torch.float64)
+
+        for _ in range(self.n_epochs):
+            perm = torch.randperm(N)
+            net1.train()
+            net2.train()
+            for start in range(0, N, self.batch_size):
+                batch = perm[start:start + self.batch_size]
+                if len(batch) < 4:          # too small for BatchNorm
+                    continue
+                loss = self._cca_loss(net1(X_t[batch]), net2(Y_t[batch]))
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+
+        net1.eval()
+        net2.eval()
+        with torch.no_grad():
+            H1 = net1(X_t).numpy()
+            H2 = net2(Y_t).numpy()
+
+        return H1, H2
+
+    # ── Gaussian MI from projected representations ────────────────────────
+
+    def _mi_from_projections(self, H1: np.ndarray, H2: np.ndarray) -> float:
+        """
+        Estimate MI from canonical correlations of (H1, H2).
+
+        Applies the Gaussian MI formula to the nonlinearly projected features,
+        using the same Cholesky-based CCA computation as CCAMutualInformationMetric.
+        """
+        eps = 1e-5
+        N   = len(H1)
+        d1  = H1.shape[1]
+        d2  = H2.shape[1]
+
+        H1 = H1 - H1.mean(0)
+        H2 = H2 - H2.mean(0)
+
+        XY  = np.hstack([H1, H2])
+        Cov = (XY.T @ XY) / (N - 1)
+
+        C11 = Cov[:d1, :d1] + eps * np.eye(d1)
+        C22 = Cov[d1:, d1:] + eps * np.eye(d2)
+        C12 = Cov[:d1, d1:]
+
+        try:
+            L1   = np.linalg.cholesky(C11)
+            L2   = np.linalg.cholesky(C22)
+            W    = np.linalg.solve(L1, C12)
+            W    = np.linalg.solve(L2, W.T).T
+            rho2 = np.linalg.svd(W, compute_uv=False) ** 2
+        except np.linalg.LinAlgError:
+            def _eigh_pinv(A):
+                vals, vecs = np.linalg.eigh(A)
+                tol  = max(vals.max() * A.shape[0] * np.finfo(float).eps * 10, 1e-12)
+                keep = vals > tol
+                return (vecs[:, keep] / vals[keep]) @ vecs[:, keep].T
+            M    = _eigh_pinv(C11) @ C12 @ _eigh_pinv(C22) @ C12.T
+            rho2 = np.real(np.linalg.eigvalsh(M))
+
+        rho2 = np.clip(rho2, 0.0, 1.0 - 1e-9)
+        return max(-0.5 * float(np.sum(np.log(1.0 - rho2))), 0.0)
+
+    # ── Public API — mirrors MutualInformationMetric.compute() exactly ────
+
+    def compute(
+        self,
+        category_data: dict,
+        pca_dim:       int,
+        rng:           np.random.Generator = None,
+        pca_text:      PCA = None,
+        **_kwargs,
+    ) -> dict:
+        """
+        Compute DeepCCA MI estimates per annotation category.
+
+        Trains three independent DeepCCA models per bootstrap resample
+        (one each for text/Y, ts/Y, joint/Y) and estimates MI from the
+        canonical correlations of the learned projections.
+
+        Signature and return structure are identical to
+        MutualInformationMetric.compute() — drop-in replacement.
+
+        Parameters
+        ----------
+        category_data : {cat: {'ts', 'y', 'x', 'n_samples'}}
+        pca_dim       : PCA dims for text embeddings
+        rng           : numpy Generator (created if None)
+        pca_text      : pre-fitted PCA (fitted on pooled data if None)
+
+        Returns
+        -------
+        Same dict as MutualInformationMetric.compute():
+            'text' / 'ts' / 'joint' / 'conditional' : {cat: [bootstrap samples]}
+            '<key>_mean' / '<key>_std'               : {cat: float}
+            'explained_variance'                     : {cat: float}
+            'd_conservative' / 'd_liberal'           : {cat: int}
+        """
+        if rng is None:
+            rng = np.random.default_rng(self.seed)
+
+        pooled, pca_text = _prepare_pooled(category_data, pca_text)
+
+        metrics     = ['text', 'ts', 'joint', 'conditional']
+        all_metrics = (metrics
+                       + [f"{m}_mean" for m in metrics]
+                       + [f"{m}_std"  for m in metrics]
+                       + ['explained_variance', 'd_conservative', 'd_liberal'])
+        results = {m: {c: [] for c in category_data} for m in all_metrics}
+        cumvar  = np.cumsum(pca_text.explained_variance_ratio_)
+
+        for cat_idx, cat in enumerate(category_data):
+            x_pooled, X_ts, Y = pooled[cat]
+            X_text  = pca_text.transform(x_pooled)[:, :pca_dim]
+            X_joint = np.hstack([X_ts, X_text])
+            Y_2d    = Y if Y.ndim > 1 else Y.reshape(-1, 1)
+            N       = len(Y_2d)
+
+            d_conservative = int(np.sqrt(N / 2))
+            d_liberal      = N // 5
+
+            cat_rng = np.random.default_rng(self.seed)
+
+            for b in range(self.n_bootstrap):
+                idx = (cat_rng.choice(N, size=N, replace=True)
+                       if self.n_bootstrap > 1 else np.arange(N))
+
+                # Use distinct seeds per bootstrap/term so training runs are independent
+                torch_seed = self.seed * 1000 + b
+
+                H1_text,  H2_text  = self._train_and_project(
+                    X_text[idx],  Y_2d[idx], torch_seed)
+                H1_ts,    H2_ts    = self._train_and_project(
+                    X_ts[idx],    Y_2d[idx], torch_seed + 1)
+                H1_joint, H2_joint = self._train_and_project(
+                    X_joint[idx], Y_2d[idx], torch_seed + 2)
+
+                mi_text  = self._mi_from_projections(H1_text,  H2_text)
+                mi_ts    = self._mi_from_projections(H1_ts,    H2_ts)
+                mi_joint = self._mi_from_projections(H1_joint, H2_joint)
+
+                results['text'][cat].append(mi_text)
+                results['ts'][cat].append(mi_ts)
+                results['joint'][cat].append(mi_joint)
+                results['conditional'][cat].append(mi_joint - mi_ts)
+
+            for m in metrics:
+                results[f"{m}_mean"][cat] = float(np.mean(results[m][cat]))
+                results[f"{m}_std"][cat]  = float(np.std(results[m][cat]))
+
+            results['explained_variance'][cat] = float(
+                cumvar[min(pca_dim - 1, len(cumvar) - 1)]
+            )
+            results['d_conservative'][cat] = d_conservative
+            results['d_liberal'][cat]      = d_liberal
+
+        return results
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -1444,5 +1807,6 @@ METRICS = {
     'v_information':      VInformationMetric,
     'mine':               MINEMetric,
     'infonce':            InfoNCEMetric,
-    'cca': CCAMutualInformationMetric,
+    'cca':                CCAMutualInformationMetric,
+    'deep_cca':           DeepCCAMetric,
 }

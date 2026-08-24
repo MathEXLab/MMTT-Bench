@@ -1,0 +1,113 @@
+# mmtt_bench_cfa.yaml
+# Train CFA backbone models on mmtt-bench annotation-point datasets.
+#
+# data_format: mmtt  — one sample per annotation point (no sliding window),
+# preserving the independence of samples needed for MI comparison.
+#
+# The sine_synergy dataset has four text categories:
+#   correct    — text correctly describes the TS signal at that point
+#   incorrect  — text is plausible but describes the wrong direction/magnitude
+#   irrelevant — text is sampled from an entirely different signal
+#   synergy    — text provides information not observable from TS alone
+#
+# Running all four lets us directly compare model performance across
+# text quality conditions that the MI benchmark already characterises.
+
+data_format: mmtt
+scale_data:  false   # sine values already in [-1,1]; keep raw scale for
+                     # direct comparison with train_transformer.py results
+
+# ── Text encoder ──────────────────────────────────────────────────────────────
+llm_model:     BERT
+llm_layers:    6
+pool_type:     avg
+use_fullmodel: false
+
+# ── CFA adapter ───────────────────────────────────────────────────────────────
+cfa_reduction: 8
+
+# ── TS backbone hyperparameters (CFA paper Table E.1) ─────────────────────────
+d_model:  512
+n_heads:  8
+e_layers: 2
+d_layers: 1
+d_ff:     2048
+dropout:  0.1
+
+# ── Training ──────────────────────────────────────────────────────────────────
+train_epochs:  30      # matches train_transformer.py default
+patience:      5
+batch_size:    32
+learning_rate: 0.001   # matches train_transformer.py (1e-3, not CFA paper's 1e-4)
+lr_mlp:        0.01
+lr_multiplier: 1.0
+
+# ── Injection modes ───────────────────────────────────────────────────────────
+injection_modes:
+  # Naive
+  - unimodal
+  - first-additive
+  - middle-additive
+  - last-additive
+  - first-concat
+  - middle-concat
+  - last-concat
+  # Constrained
+  - film
+  - cfa
+  - gating
+  - orthogonal
+
+# ── Models ────────────────────────────────────────────────────────────────────
+models:
+  - PatchTST
+  - DLinear
+  - iTransformer
+  - Autoformer
+  - FEDformer
+  - Informer
+  - TiDE
+  - FiLM
+  # - FreTS
+  - Koopa
+  - Nonstationary_Transformer
+  # - TimeMixer
+  # - TimesNet
+  # - TSMixer
+
+# ── Datasets ──────────────────────────────────────────────────────────────────
+# Four runs over the same sine_synergy split — one per text category.
+# This mirrors how train_transformer.py loops over input_configs.
+datasets:
+  - name:       sine_correct
+    train_json: datasets/sine_synergy/train.json
+    val_json:   datasets/sine_synergy/val.json
+    freq:       synthetic
+    categories: [correct]
+
+  - name:       sine_incorrect
+    train_json: datasets/sine_synergy/train.json
+    val_json:   datasets/sine_synergy/val.json
+    freq:       synthetic
+    categories: [incorrect]
+
+  - name:       sine_irrelevant
+    train_json: datasets/sine_synergy/train.json
+    val_json:   datasets/sine_synergy/val.json
+    freq:       synthetic
+    categories: [irrelevant]
+
+  - name:       sine_synergy
+    train_json: datasets/sine_synergy/train.json
+    val_json:   datasets/sine_synergy/val.json
+    freq:       synthetic
+    categories: [synergy]
+
+# ── Per-frequency window settings ─────────────────────────────────────────────
+# synthetic: matches sine_synergy.yaml (lookback_steps=2 padded to
+# TRANSFORMER_MIN_LOOKBACK=8, horizon_steps=1, label_len = seq_len//2).
+freq_settings:
+  synthetic:
+    pred_lengths: [1]
+    seq_len:  8
+    label_len: 4
