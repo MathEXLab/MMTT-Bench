@@ -27,9 +27,6 @@ def _stack_3d_signal(metadata: dict) -> np.ndarray:
     """
     Return the dense signal as a numpy array.
 
-    For 3-D Rössler data (metadata contains 'y_comp' and 'z_comp') the
-    result is (L, 3) with columns [x, y_comp, z_comp].
-    For all other signals the result is the plain (L,) y array.
     """
     y = np.asarray(metadata['y'])
     if 'y_comp' in metadata and 'z_comp' in metadata:
