@@ -199,8 +199,23 @@ def _run_metrics(category_data, metrics_cfg: dict, compute_kwargs: dict) -> dict
 # Sweep parameter logic (mirrors sweep.py but works on raw cfg dicts)
 # ---------------------------------------------------------------------------
 
-def _apply_sweep_value(cfg: dict, param: str, value) -> dict:
-    """Return a copy of cfg with the sweep param set to value."""
+def _apply_sweep_value(cfg: dict, param, value) -> dict:
+    """Return a copy of cfg with the sweep param set to value.
+
+    `param` may be a list of names paired with a list of values, for sweeps over
+    fields that are not independent — PatchTST tokenisation, where lookback must
+    be at least patch_len, so patch_len/stride/lookback_steps only make sense as
+    a tuple.
+    """
+    if isinstance(param, (list, tuple)):
+        if len(param) != len(value):
+            raise ValueError(
+                f"Sweep declares {len(param)} params {list(param)} but the value "
+                f"{value!r} has {len(value)} entries; they must correspond."
+            )
+        for p, v in zip(param, value):
+            cfg = _apply_sweep_value(cfg, p, v)
+        return cfg
     cfg = deepcopy(cfg)
     if param in cfg:
         cfg[param] = value
@@ -255,7 +270,10 @@ def run_sweep(cfg: dict) -> dict:
         metrics_cfg    = _parse_metrics(point_cfg)
 
         # Only rebuild category_data when the sweep touches a data field.
-        if val == values[0] or param in _DATA_FIELDS:
+        touches_data = (any(p in _DATA_FIELDS for p in param)
+                        if isinstance(param, (list, tuple))
+                        else param in _DATA_FIELDS)
+        if val == values[0] or touches_data:
             print("  Building category data ...")
             category_data = _build_category_data(point_cfg)
 

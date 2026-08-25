@@ -69,13 +69,10 @@ models:
   - Autoformer
   - FEDformer
   - Informer
-  - Transformer
-  - Reformer
-  - Crossformer
-  - TSMixer
   - TiDE
-  - Nonstationary_Transformer
   - FiLM
+  # - FreTS
+  - Nonstationary_Transformer
   # Koopa excluded: calls data_provider() during __init__ to compute frequency
   # masks, which requires the full CFA data-loading stack (configs.data, root_path,
   # data_path etc.) that our SimpleNamespace does not provide.
@@ -90,50 +87,50 @@ models:
 # replace train_json/val_json with root_path/data_path (see git history).
 datasets:
   - name:       Agriculture
-    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Agriculture/train.json
-    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Agriculture/val.json
+    train_json: datasets/timemmd_cfa_splits/Agriculture/train.json
+    val_json:   datasets/timemmd_cfa_splits/Agriculture/val.json
     freq:       monthly
     categories: ['correct', 'incorrect', 'irrelevant']
 
   - name:       Climate
-    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Climate/train.json
-    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Climate/val.json
+    train_json: datasets/timemmd_cfa_splits/Climate/train.json
+    val_json:   datasets/timemmd_cfa_splits/Climate/val.json
     freq:       monthly
     categories: ['correct', 'incorrect', 'irrelevant']
 
   - name:       Economy
-    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Economy/train.json
-    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Economy/val.json
+    train_json: datasets/timemmd_cfa_splits/Economy/train.json
+    val_json:   datasets/timemmd_cfa_splits/Economy/val.json
     freq:       monthly
     categories: ['correct', 'incorrect', 'irrelevant']
 
   - name:       Energy
-    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Energy/train.json
-    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Energy/val.json
+    train_json: datasets/timemmd_cfa_splits/Energy/train.json
+    val_json:   datasets/timemmd_cfa_splits/Energy/val.json
     freq:       weekly
     categories: ['correct', 'incorrect', 'irrelevant']
 
   - name:       PublicHealth
-    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/PublicHealth/train.json
-    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/PublicHealth/val.json
+    train_json: datasets/timemmd_cfa_splits/PublicHealth/train.json
+    val_json:   datasets/timemmd_cfa_splits/PublicHealth/val.json
     freq:       weekly
     categories: ['correct', 'incorrect', 'irrelevant']
 
   - name:       Security
-    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Security/train.json
-    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Security/val.json
+    train_json: datasets/timemmd_cfa_splits/Security/train.json
+    val_json:   datasets/timemmd_cfa_splits/Security/val.json
     freq:       monthly
     categories: ['correct', 'incorrect', 'irrelevant']
 
   - name:       SocialGood
-    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/SocialGood/train.json
-    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/SocialGood/val.json
+    train_json: datasets/timemmd_cfa_splits/SocialGood/train.json
+    val_json:   datasets/timemmd_cfa_splits/SocialGood/val.json
     freq:       monthly
     categories: ['correct', 'incorrect', 'irrelevant']
 
   - name:       Traffic
-    train_json: /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Traffic/train.json
-    val_json:   /root/emma-code/mmtt-bench/datasets/timemmd_cfa_splits/Traffic/val.json
+    train_json: datasets/timemmd_cfa_splits/Traffic/train.json
+    val_json:   datasets/timemmd_cfa_splits/Traffic/val.json
     freq:       monthly
     categories: ['correct', 'incorrect', 'irrelevant']
 

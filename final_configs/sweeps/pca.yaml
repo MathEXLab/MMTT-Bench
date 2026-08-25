@@ -1,0 +1,52 @@
+# Table 5 — conditional MI per PCA dimension.
+# KSG is unreliable above d <= sqrt(N/2) ~ 25, which is why 16 is the operating point.
+
+# Final config — large sine dataset (512 signals, 30% zeros)
+
+data_path:      datasets/benchmark_splits/train.json
+embedding_type: sentence_transformer
+model_name:     sentence-transformers/all-distilroberta-v1
+ts_tokenizer:   identity
+horizon_steps:  1
+lookback_steps: 1
+patch_len:      1
+stride:         1
+
+compute_kwargs:
+  pca_dim:      16
+  n_bootstrap:  20
+  strategy: discrete
+
+metrics:
+  mutual_information:
+    n_neighbours: 1
+    n_subsample_reps:  20
+  mine:
+    mine_iters: 500
+    n_bootstrap: 20
+    lr: 0.0001
+  infonce:
+    n_bootstrap: 20    # point estimate — training is slow
+    hidden_dim:  128
+    n_iters:     500
+    batch_size:  64      # ceiling on MI = log(64) ≈ 4.2 nats
+    lr:          0.001
+  cca:
+    n_bootstrap: 20    # same as KSG for fair variance comparison
+    eps: 1e-5 
+  v_information:
+    cv: 5
+    n_bootstrap:  20
+  pid:
+    n_clusters_ts:   4
+    n_clusters_text: 5
+    n_bins_y:        4
+    n_bootstrap:  20
+
+sweep:
+  param: pca_dim
+  values:
+    - 4
+    - 8
+    - 16
+    - 32

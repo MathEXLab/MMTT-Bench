@@ -29,7 +29,9 @@ Sweep visualisation (run.py sweep output only):
 from __future__ import annotations
 
 import argparse
+import glob
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -43,17 +45,11 @@ from src.mmtt_bench.viz import (
     PERF_METRIC_LABEL,
     MODEL_MARKERS,
     MODEL_LINESTYLES,
-    plot_overlay,
-    print_single_table,
-    plot_single_bar,
-    plot_sweep_lines,
-    plot_sweep_all_metrics,
-    plot_conditional_comparison,
-    plot_conditional_sweep,
-    print_sweep_table,
-    plot_info_vs_delta,
     plot_correlation_trends,
-    plot_delta_bars,
+    plot_embedding_sensitivity,
+    plot_ordering_grid,
+    plot_annotation_example,
+    plot_realworld_mi_grid,
     plot_model_mixture,
 )
 
@@ -330,6 +326,294 @@ def _runs_by_metric(data: dict) -> dict[str, list]:
 # Entry point
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# Figure 5 — loading the real-world results
+#
+# Drawing lives in viz.plot_realworld_mi_grid(); everything here is data
+# assembly, matching the split used by the rest of this module.
+# ---------------------------------------------------------------------------
+
+CATEGORIES = ["correct", "incorrect", "irrelevant"]
+ESTIMATORS = ["mutual_information", "mine", "infonce", "cca", "v_information", "pid"]
+BASELINE = "no_text"
+SERIES = [BASELINE] + CATEGORIES
+
+FINTEXTS_TICKERS = ["AMD", "BA", "COST", "DIS", "GOOGL", "INTC", "NFLX", "NVDA", "T", "TSLA"]
+TIMEMMD = [("Agriculture", 6), ("Climate", 6), ("Energy", 12),
+           ("PublicHealth", 12), ("SocialGood", 6), ("Traffic", 6)]
+DATASET_LABEL = {"PublicHealth": "Public\nHealth", "SocialGood": "Social\nGood",
+                 "FinTexTS": "FinTexTS\n(10 tickers)"}
+
+
+# ── Loading ──────────────────────────────────────────────────────────────────
+def _first(pattern: str) -> str | None:
+    hits = glob.glob(pattern, recursive=True)
+    return hits[0] if hits else None
+
+
+def _stat(md: dict, field: str, cat: str) -> tuple[float, float]:
+    """Mean and std of a metric field for one category, tolerating both the
+    mean/std layout and a raw list of bootstrap draws."""
+    if f"{field}_mean" in md:
+        return float(md[f"{field}_mean"][cat]), float(md[f"{field}_std"][cat])
+    v = md[field][cat]
+    v = v if isinstance(v, list) else [v]
+    return float(np.mean(v)), float(np.std(v))
+
+
+def _pid_text_info(md: dict, cat: str) -> tuple[float, float]:
+    """PID identity: I(ts,text;Y) - I(ts;Y) = U_text + S exactly, so PID reports
+    the net text contribution directly. Component covariances are unavailable,
+    so sigma sums the two variances."""
+    u, us = _stat(md, "unique_text", cat)
+    s, ss = _stat(md, "synergy", cat)
+    return u + s, float(np.hypot(us, ss))
+
+
+def mi_value(md: dict, est: str, cat: str, quantity: str) -> tuple[float, float]:
+    """Raw estimate for one (estimator, category), before any contrast is taken.
+
+    joint        I(X_ts, X_text; Y) — the quantity both derived measures come
+                 from: net gain is joint minus the ts-only value, alignment is
+                 joint|correct minus joint|incorrect.
+    text         I(X_text; Y), the text-only marginal.
+    conditional  the estimator's own paired-resample conditional field.
+
+    PID stores components rather than a joint field; they sum to the joint by
+    construction (I(ts,text;Y) = R + U_ts + U_text + S), so it is reassembled.
+    """
+    if est == "pid":
+        if quantity == "conditional":
+            return _pid_text_info(md, cat)
+        if quantity == "text":
+            return _stat(md, "unique_text", cat)
+        parts = [_stat(md, k, cat) for k in ("redundancy", "unique_ts", "unique_text", "synergy")]
+        return float(sum(m for m, _ in parts)), float(np.sqrt(sum(s ** 2 for _, s in parts)))
+
+    pre = "v_" if est == "v_information" else ""
+    return _stat(md, f"{pre}{quantity}", cat)
+
+
+def ts_only(md: dict, est: str) -> float:
+    """Time-series-only reference. Identical across categories by construction
+    (same series, no text), so averaged over them for numerical stability."""
+    try:
+        if est == "pid":
+            vals = [_stat(md, "redundancy", c)[0] + _stat(md, "unique_ts", c)[0]
+                    for c in CATEGORIES]
+        else:
+            pre = "v_" if est == "v_information" else ""
+            vals = [_stat(md, f"{pre}ts", c)[0] for c in CATEGORIES]
+        return float(np.mean(vals))
+    except (KeyError, TypeError):
+        return np.nan
+
+
+def net_contribution(md: dict, est: str, cat: str) -> tuple[float, float]:
+    """Net information text adds beyond the series, with its standard error.
+
+    Read from the estimator's own paired-resample conditional field (joint - ts
+    within the SAME draw), never as joint_mean - ts_mean. The joint and marginal
+    estimates share resamples and are strongly correlated, so dividing the
+    difference of means by the joint's own standard deviation ignores that
+    correlation, overstates sigma and understates the contribution — by a factor
+    of ~3 for CCA on these datasets.
+    """
+    if est == "pid":
+        return _pid_text_info(md, cat)
+    pre = "v_" if est == "v_information" else ""
+    try:
+        return _stat(md, f"{pre}conditional", cat)
+    except (KeyError, TypeError):
+        return np.nan, np.nan
+
+
+def pct_mse_change(model_path: str) -> dict[str, np.ndarray]:
+    """% change in MSE vs the no-text baseline, one value per configuration.
+    Negative means adding text lowered error.
+
+    Only configurations present in *every* category are kept, so the returned
+    arrays are aligned index-by-index and the paired test below compares like
+    with like. Building each category independently would silently offset the
+    arrays whenever one category is missing a run.
+    """
+    d = json.load(open(model_path))
+    res = d["results"]
+    usable = [m for m in d["models"]
+              if all(m in res.get(c, {}) for c in CATEGORIES + ["no_text"])
+              and res["no_text"][m]["overall"]["mse"]]
+    return {c: np.array([(res[c][m]["overall"]["mse"] - res["no_text"][m]["overall"]["mse"])
+                         / res["no_text"][m]["overall"]["mse"] * 100 for m in usable], float)
+            for c in CATEGORIES}
+
+
+def _mi_block(metrics, quantity: str, pooled: bool = False) -> dict:
+    """{estimator: {'vals': {cat: (mean, std)}, 'ts': float}} for one dataset."""
+    out: dict[str, dict] = {}
+    for est in ESTIMATORS:
+        srcs = [m for m in (metrics if pooled else [metrics]) if est in m]
+        if not srcs:
+            continue
+        vals = {}
+        for cat in CATEGORIES:
+            try:
+                got = [mi_value(m[est], est, cat, quantity) for m in srcs]
+            except (KeyError, TypeError):
+                continue
+            vals[cat] = (float(np.mean([g[0] for g in got])),
+                         float(np.mean([g[1] for g in got])))
+        net = {}
+        for cat in CATEGORIES:
+            got = [net_contribution(m[est], est, cat) for m in srcs]
+            got = [g for g in got if np.isfinite(g[0]) and np.isfinite(g[1])]
+            if got:
+                net[cat] = (float(np.mean([g[0] for g in got])),
+                            float(np.mean([g[1] for g in got])))
+        if vals:
+            out[est] = {"vals": vals, "net": net,
+                        "ts": float(np.nanmean([ts_only(m[est], est) for m in srcs]))}
+    return out
+
+
+def load_all(quantity: str) -> list[dict]:
+    rows = []
+
+    for name, pl in TIMEMMD:
+        mi_path = f"results/timemmd_cfa/{name}.json"
+        mdl = _first(f"results/timemmd_all/transformer/{name}_pl{pl}.json/**/*.json")
+        if not (os.path.exists(mi_path) and mdl):
+            print(f"  [skip] {name}")
+            continue
+        metrics = json.load(open(mi_path))["results_by_metric"]
+        rows.append(dict(name=name, mse=pct_mse_change(mdl),
+                         mi=_mi_block(metrics, quantity)))
+
+    # FinTexTS: pool configurations across tickers, average MI across tickers.
+    per_cat: dict[str, list[float]] = {c: [] for c in CATEGORIES}
+    tick_metrics = []
+    for tk in FINTEXTS_TICKERS:
+        mdl = _first(f"results/fintexts/transformer_perfield/{tk}/**/*.json")
+        if mdl:
+            for c, v in pct_mse_change(mdl).items():
+                per_cat[c].extend(v.tolist())
+        mi_path = f"results/fintexts_perfield/{tk}.json"
+        if os.path.exists(mi_path):
+            tick_metrics.append(json.load(open(mi_path))["results_by_metric"])
+    if tick_metrics and any(len(v) for v in per_cat.values()):
+        rows.append(dict(name="FinTexTS",
+                         mse={c: np.asarray(v, float) for c, v in per_cat.items()},
+                         mi=_mi_block(tick_metrics, quantity, pooled=True)))
+    return rows
+
+
+def preference_p(mse: dict[str, np.ndarray]) -> float:
+    """Wilcoxon signed-rank p for best vs second-best category, paired by
+    configuration. Answers: is there any corpus preference to detect at all?"""
+    usable = [c for c in CATEGORIES if len(mse[c])]
+    if len(usable) < 2:
+        return np.nan
+    order = sorted(usable, key=lambda c: np.median(mse[c]))
+    try:
+        return float(wilcoxon(mse[order[0]], mse[order[1]])[1])
+    except ValueError:
+        return np.nan
+
+
+def ts_stat(md: dict, est: str) -> tuple[float, float]:
+    """Series-only estimate and its bootstrap sigma. Identical across text
+    categories by construction (same series, no text), so averaged over them.
+    PID has no ts field; R + U_ts is the series-only share by definition."""
+    try:
+        if est == "pid":
+            pairs = [(_stat(md, "redundancy", c), _stat(md, "unique_ts", c)) for c in CATEGORIES]
+            m = float(np.mean([a[0] + b[0] for a, b in pairs]))
+            s = float(np.mean([np.hypot(a[1], b[1]) for a, b in pairs]))
+            return m, s
+        pre = "v_" if est == "v_information" else ""
+        vals = [_stat(md, f"{pre}ts", c) for c in CATEGORIES]
+        return float(np.mean([v[0] for v in vals])), float(np.mean([v[1] for v in vals]))
+    except (KeyError, TypeError):
+        return np.nan, np.nan
+
+
+def collect(rows: list[dict], quantity: str = "joint") -> dict:
+    """{estimator: {dataset_index: {series: (mean, std, differs_from_baseline)}}}
+
+    quantity="joint"        marker is I(X_ts, X_text; Y), baseline is the
+                            estimator's series-only value; the conditional is
+                            then the gap between them.
+    quantity="conditional"  marker is I(X_text; Y | X_ts) read from the paired
+                            resample field, baseline is exactly zero because a
+                            corpus that adds nothing has no conditional
+                            information by definition.
+    """
+    out: dict[str, dict[int, dict[str, tuple]]] = {e: {} for e in ESTIMATORS}
+    for idx, r in enumerate(rows):
+        srcs = r["_metrics"] if r.get("_pooled") else [r["_metrics"]]
+        for est in ESTIMATORS:
+            have = [m for m in srcs if est in m]
+            if not have:
+                continue
+            entry: dict[str, tuple] = {}
+            if quantity == "conditional":
+                entry[BASELINE] = (0.0, 0.0, False)
+            else:
+                bt = [ts_stat(m[est], est) for m in have]
+                entry[BASELINE] = (float(np.mean([b[0] for b in bt])),
+                                   float(np.mean([b[1] for b in bt])), False)
+            for cat in CATEGORIES:
+                # Significance always uses the paired conditional, never joint
+                # minus ts as separate means: the two share resamples and are
+                # correlated, so an unpaired sigma would be too wide.
+                net = [net_contribution(m[est], est, cat) for m in have]
+                net = [n for n in net if np.isfinite(n[0]) and np.isfinite(n[1])]
+                if not net:
+                    continue
+                # KSG returns an exactly-zero conditional with exactly zero
+                # variance on some datasets: the joint estimate is bit-identical
+                # to the series-only one in every resample. That is a reading,
+                # not a gap, so it is plotted — and with no spread it can never
+                # differ from the baseline.
+                sd = float(np.mean([n[1] for n in net]))
+                differs = sd > 0 and abs(np.mean([n[0] for n in net])) > 1.96 * sd
+                if quantity == "conditional":
+                    got = net
+                else:
+                    try:
+                        got = [mi_value(m[est], est, cat, "joint") for m in have]
+                    except (KeyError, TypeError):
+                        continue
+                entry[cat] = (float(np.mean([g[0] for g in got])),
+                              float(np.mean([g[1] for g in got])), differs)
+            if len(entry) > 1:
+                out[est][idx] = entry
+    return out
+
+
+def load_realworld_results(quantity: str = "joint"):
+    """Everything Figure 5 needs: per-dataset MSE distributions and MI estimates.
+
+    Returns (rows, data) for viz.plot_realworld_mi_grid(). Datasets with no
+    results on disk are skipped, so a partial run still plots.
+    """
+    rows = load_all(quantity)
+    by_name = {}
+    for name, _ in TIMEMMD:
+        p = f"results/timemmd_cfa/{name}.json"
+        if os.path.exists(p):
+            by_name[name] = (json.load(open(p))["results_by_metric"], False)
+    tick = [json.load(open(f"results/fintexts_perfield/{t}.json"))["results_by_metric"]
+            for t in FINTEXTS_TICKERS
+            if os.path.exists(f"results/fintexts_perfield/{t}.json")]
+    if tick:
+        by_name["FinTexTS"] = (tick, True)
+    rows = [r for r in rows if r["name"] in by_name]
+    for r in rows:
+        r["_metrics"], r["_pooled"] = by_name[r["name"]]
+    return rows, collect(rows, quantity)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Plot benchmark results (info metrics or model performance).",
@@ -339,14 +623,22 @@ def main() -> None:
     # Info-metrics mode
     parser.add_argument("results", nargs="*",
                         help="Path(s) to run.py JSON(s)")
+    parser.add_argument("--figure1", action="store_true",
+                        help="build Figure 1 (signal with example annotations) and exit")
+    parser.add_argument("--fig1-data", default="datasets/benchmark_splits/train.json",
+                        help="split JSON Figure 1 draws from")
+    parser.add_argument("--figure2", nargs="*", metavar="SWEEP_JSON",
+                        help="build Figure 2 (ordering grid + encoder sensitivity). "
+                             "Pass the sweep JSONs, or none to look in results/mmtt_bench/")
+    parser.add_argument("--figure5", action="store_true",
+                        help="build Figure 5 (real-world MI grid) from results/ and exit")
+    parser.add_argument("--fig5-quantity", default="joint", choices=["joint", "conditional"],
+                        help="joint: I(ts,text;Y) against the series-only rule. "
+                             "conditional: I(text;Y|ts) against a rule at zero")
+    parser.add_argument("--fig5-no-mse", action="store_true",
+                        help="drop the downstream-MSE column from Figure 5")
     parser.add_argument("--output-dir", "-o", default=None,
                         help="Directory to save plots (default: show interactively)")
-    parser.add_argument("--submetric", default=None,
-                        help="MI submetric to highlight in sweep line plot")
-    parser.add_argument("--overlay", action="store_true",
-                        help="Overlay multiple sweep files (requires ≥2 files)")
-    parser.add_argument("--labels", nargs="*", default=None,
-                        help="Display labels for overlay or compare mode")
 
     # Compare mode
     parser.add_argument("--metrics", nargs="+", default=None,
@@ -370,12 +662,62 @@ def main() -> None:
 
     args = parser.parse_args()
 
+
     out_dir = Path(args.output_dir) if args.output_dir else None
     if out_dir:
         out_dir.mkdir(parents=True, exist_ok=True)
 
     def _out(name: str) -> str | None:
         return str(out_dir / name) if out_dir else None
+
+    if args.figure1:
+        raw = json.load(open(args.fig1_data))
+        plot_annotation_example(raw, save_path=_out("figure1_annotations.png"))
+        return
+
+    if args.figure2 is not None:
+        paths = args.figure2 or sorted(glob.glob("results/mmtt_bench/sweep_*.json"))
+        if not paths:
+            parser.error("no sweep JSONs given and none found in results/mmtt_bench/ — "
+                         "run reproduce/01_mmtt_bench.sh first")
+        # The published figure shows PCA dim and lookback; the encoder and patch
+        # sweeps are available as extra panels but were cut for width.
+        CHOSEN = {"pca_dim": 16, "lookback_steps": 2, "patch_len": 1}
+        NAMES = {"pca_dim": "PCA dim", "lookback_steps": "Lookback",
+                 "model_name": "Encoder", "patch_len": "Patch/stride"}
+        panels, encoder = [], None
+        for path in paths:
+            d = json.load(open(path))
+            param = d["sweep_param"]
+            if param == "model_name":
+                encoder = d
+                continue
+            key = param[0] if isinstance(param, list) else param
+            vals = d["sweep_values"]
+            labels = ["/".join(str(x) for x in v) if isinstance(v, list) else str(v)
+                      for v in vals]
+            chosen = next((i for i, v in enumerate(vals)
+                           if (v[0] if isinstance(v, list) else v) == CHOSEN.get(key)), None)
+            panels.append({"name": NAMES.get(key, key), "runs": d["runs"],
+                           "labels": labels, "chosen": chosen})
+        if panels:
+            plot_ordering_grid(panels, save_path=_out("figure2_ordering_grid.png"))
+        if encoder is not None:
+            labels = [str(v).split("/")[-1] for v in encoder["sweep_values"]]
+            plot_embedding_sensitivity(encoder["runs"], labels,
+                                       save_path=_out("figure2_encoder_sensitivity.png"))
+        return
+
+    if args.figure5:
+        rows, data = load_realworld_results(args.fig5_quantity)
+        if not rows:
+            parser.error("no real-world results found under results/ — "
+                         "run reproduce/02_timemmd.sh and 03_fintexts.sh first")
+        print(f"Figure 5 from {len(rows)} datasets: {', '.join(r['name'] for r in rows)}")
+        plot_realworld_mi_grid(rows, data, quantity=args.fig5_quantity,
+                               show_mse=not args.fig5_no_mse,
+                               save_path=_out("figure5_realworld_mi.png"))
+        return
 
     # ── Default mode: --metrics + --models ───────────────────────────────────
     if args.metrics or args.models:
@@ -384,7 +726,7 @@ def main() -> None:
         if len(args.metrics) != len(args.models):
             parser.error("--metrics and --models must have the same number of paths")
 
-        labels = args.labels or [Path(p).stem for p in args.metrics]
+        labels = [Path(p).stem for p in args.metrics]
 
         for label, metrics_path, models_path in zip(labels, args.metrics, args.models):
             print(f"\n{'━' * 70}")
@@ -405,14 +747,6 @@ def main() -> None:
             tables       = build_eval_table(metrics_data, all_deltas, categories)
             info_metrics = [m for m in CONDITIONAL_KEY if m in metrics_data]
 
-            # Bar chart per metric family
-            for metric_name, results in metrics_data.items():
-                print_single_table(results, label=METRIC_LABELS.get(metric_name, metric_name))
-                plot_single_bar(
-                    results,
-                    title=METRIC_DISPLAY.get(metric_name, metric_name),
-                    save_path=_out(f"{label}_{metric_name}.png"),
-                )
 
             print_correlations(tables, info_metrics, label=label)
 
@@ -423,24 +757,12 @@ def main() -> None:
                 if model in model_data["results"].get("no_text", {})
             }
 
-            plot_info_vs_delta(
-                tables, info_metrics,
-                scores_dict=best_model_scores,
-                perf_metric=args.perf_metric,
-                save_path=_out(f"{label}_scatter_{args.perf_metric}.png"),
-            )
             plot_correlation_trends(
                 tables, info_metrics,
                 scores_dict=best_model_scores,
                 perf_metric=args.perf_metric,
                 title=f"{label} — correlation trend ({args.perf_metric})",
                 save_path=_out(f"{label}_correlation_trends_{args.perf_metric}.png"),
-            )
-            plot_delta_bars(
-                tables,
-                perf_metric=args.perf_metric,
-                title=f"{label} — {args.perf_metric} by category",
-                save_path=_out(f"{label}_delta_bars_{args.perf_metric}.png"),
             )
 
             if "mixture" in Path(metrics_path).name or "mixture" in Path(models_path).name:
@@ -459,51 +781,22 @@ def main() -> None:
 
     datasets = [_load(p) for p in args.results]
 
-    if args.overlay:
-        if len(datasets) < 2:
-            parser.error("--overlay requires at least 2 result files")
-        labels    = args.labels or [Path(p).stem for p in args.results]
-        submetric = args.submetric or "conditional"
-        plot_overlay(datasets, labels, metric=submetric, save_path=_out("overlay.png"))
-        return
 
     data = datasets[0]
     stem = Path(args.results[0]).stem
 
     if data["type"] == "single":
-        results_by_metric = _results_by_metric(data)
-        for metric_name, results in results_by_metric.items():
-            print_single_table(results, label=METRIC_LABELS.get(metric_name, metric_name))
-            plot_single_bar(results, title=METRIC_DISPLAY.get(metric_name, metric_name),
-                            save_path=_out(f"{stem}_{metric_name}.png"))
-        plot_conditional_comparison(
-            results_by_metric, title=stem,
-            save_path=_out(f"{stem}_conditional.png"),
-        )
+        parser.error("single-run JSONs no longer have a plot mode; the per-metric "
+                     "tables they fed are produced by reproduce/make_artifacts.py")
 
     elif data["type"] == "sweep":
-        runs_by_metric = _runs_by_metric(data)
-        for metric_name, runs in runs_by_metric.items():
-            sweep_data = {
-                "sweep_param":  data["sweep_param"],
-                "sweep_values": data["sweep_values"],
-                "runs":         runs,
-            }
-            print_sweep_table(sweep_data)
-            plot_sweep_all_metrics(sweep_data,
-                                   title=METRIC_DISPLAY.get(metric_name, metric_name),
-                                   save_path=_out(f"{stem}_{metric_name}_sweep.png"))
-            if args.submetric:
-                plot_sweep_lines(sweep_data, metric=args.submetric,
-                                 save_path=_out(f"{stem}_{metric_name}_{args.submetric}.png"))
-        plot_conditional_sweep(
-            runs_by_metric,
-            sweep_param=data["sweep_param"],
-            sweep_values=data["sweep_values"],
-            title=stem,
-            save_path=_out(f"{stem}_conditional_sweep.png"),
+        # Figure 2, right panel: conditional MI per text encoder. The ordering
+        # grid (left panel) needs several sweeps at once, so it is built by
+        # reproduce/make_artifacts.py rather than from a single file here.
+        labels = [str(v) for v in data["sweep_values"]]
+        plot_embedding_sensitivity(
+            data["runs"], labels,
+            save_path=_out(f"{stem}_sensitivity.png"),
         )
-
-
 if __name__ == "__main__":
     main()

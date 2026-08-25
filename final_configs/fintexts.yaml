@@ -1,0 +1,65 @@
+# FinTexTS — the ten analysis tickers. Each is an independent dataset (shared
+# calendar, different data-generating process); estimates are pooled at the end.
+
+# Config for run.py / train.py against the FinTexTS per-ticker splits
+# (see src/mmtt_bench/data_generation/fintexts.py for how they were built).
+# Run one ticker:    python run.py fintexts.yaml --output results/fintexts/NVDA.json
+# Run all 100:        set `datasets:` to the list of
+#                      datasets/fintexts_splits/fintexts_1/<TICKER>/train.json paths
+#                      (run.py writes one output file per ticker, named from the
+#                      parent directory — same multi-dataset mode used for TTC's
+#                      per-patient medical splits).
+
+datasets:
+  - datasets/fintexts_splits/fintexts_1/AMD/train.json
+  - datasets/fintexts_splits/fintexts_1/BA/train.json
+  - datasets/fintexts_splits/fintexts_1/COST/train.json
+  - datasets/fintexts_splits/fintexts_1/DIS/train.json
+  - datasets/fintexts_splits/fintexts_1/GOOGL/train.json
+  - datasets/fintexts_splits/fintexts_1/INTC/train.json
+  - datasets/fintexts_splits/fintexts_1/NFLX/train.json
+  - datasets/fintexts_splits/fintexts_1/NVDA/train.json
+  - datasets/fintexts_splits/fintexts_1/T/train.json
+  - datasets/fintexts_splits/fintexts_1/TSLA/train.json
+
+# ModernBERT-large via plain HuggingFace AutoModel (CLS-token, mean-pool is
+# used by 'llm' instead) rather than a sentence-transformers wrapper — no
+# task-prefix convention to get wrong, and native 8192-token context so the
+# ~3000-token average combined-field text here isn't silently truncated
+# (all-distilroberta-v1's 512-token limit truncates ~83% of it away).
+embedding_type: huggingface
+model_name:     answerdotai/ModernBERT-large
+hf_batch_size:  8      # long sequences (up to 8192 tok) — keep batches modest to avoid OOM
+
+# lookback_steps=64/horizon_steps=3 match fintexts.ipynb's stated setup
+# (64-day input window, 3-day forecast horizon). patch_mean reduces the raw
+# 64-day window to 8 patches — KSG is unreliable once joint (ts + text)
+# dimensionality approaches sqrt(N/2); patching keeps ts's contribution small
+# relative to N (~700-2300 per ticker) the way it already does for TimeMMD.
+ts_tokenizer:   patch_mean
+lookback_steps: 64
+horizon_steps:  3
+patch_len:      8
+stride:         8
+
+# compute_kwargs are passed to every metric's .compute() call.
+compute_kwargs:
+  pca_dim:     5      # keep joint dims (8 ts-patches + 5 text) well under d_conservative
+  n_bootstrap: 20
+  strategy:    other  # equal-width binning (PID) — close price has no natural sign split
+
+metrics:
+  mutual_information:
+    n_neighbours: 1
+    n_subsample_reps: 20
+  cca:
+    n_bootstrap: 20
+    eps: 1e-5
+  v_information:
+    cv: 5
+    n_bootstrap: 20
+  pid:
+    n_clusters_ts:   4
+    n_clusters_text: 16
+    n_bins_y:        4
+    n_bootstrap:     20

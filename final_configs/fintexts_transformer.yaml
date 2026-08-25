@@ -1,0 +1,146 @@
+# fintexts_transformer.yaml
+# Reproduce the FinTexTS paper's setup on the local per-ticker splits
+# (src/mmtt_bench/data_generation/fintexts.py). Paper's stated methodology:
+#   - text: SBERT-embed each category, mean-pool across categories/levels,
+#     project, fuse with the TS model's forecast output. That's late/output-
+#     stage fusion -> CFA injection mode 'last-additive' (not 'cfa', which is
+#     this pipeline's own bottleneck-adapter method from the *other* paper
+#     it was built to reproduce).
+#   - 12 backbones: Autoformer, Crossformer, DLinear, FiLM, Informer,
+#     iTransformer, Nonstationary_Transformer, PatchTST, Reformer, TiDE,
+#     Transformer, TSMixer (all implemented in cfa/models/).
+#   - input horizon 64, forecast horizon 3.
+#   - price data: open/high/low/close.
+# Known deviation: MmttDataset (this file) is single-channel only
+# (data_x/data_y hardcode a trailing dim of 1) — this run uses close only,
+# not the full OHLC the paper uses. Flagged, not yet fixed.
+#
+# Text encoder: ModernBERT (not paper's SBERT, not this pipeline's default
+# BERT) for its 8192-token context — FinTexTS's concatenated daily text
+# averages ~3000 tokens, which BERT's 512-token limit would mostly truncate.
+# text_ctx is always projected to [B, pred_len=3] before fusion regardless of
+# LLM choice, so ModernBERT's larger d_llm doesn't affect fusion dimensionality.
+
+data_format: mmtt
+
+llm_model:     ModernBERT
+llm_layers:    6
+pool_type:     avg
+use_fullmodel: false
+
+cfa_reduction: 8
+
+d_model:  512
+n_heads:  8
+e_layers: 2
+d_layers: 1
+d_ff:     2048
+dropout:  0.1
+
+train_epochs:  10
+patience:      5
+batch_size:    32
+learning_rate: 0.0001
+lr_mlp:        0.01
+lr_multiplier: 1.0
+
+injection_modes:
+  - unimodal        # ts-only baseline, needed to compute gain %
+  - last-additive    # paper's fusion: text vector added to the TS model's forecast output
+
+models:
+  - PatchTST
+  - DLinear
+  - iTransformer
+  - Autoformer
+  - FEDformer
+  - Informer
+  - TiDE
+  - FiLM
+  - Nonstationary_Transformer
+  - Transformer
+
+freq_settings:
+  fintexts:
+    pred_lengths: [3]
+    seq_len:  64
+    label_len: 32
+
+datasets:
+  - name:       AMD
+    train_json: datasets/fintexts_splits/fintexts_1/AMD/train.json
+    val_json:   datasets/fintexts_splits/fintexts_1/AMD/val.json
+    freq:       fintexts
+    categories: ['correct', 'incorrect', 'irrelevant']
+
+  - name:       BA
+    train_json: datasets/fintexts_splits/fintexts_1/BA/train.json
+    val_json:   datasets/fintexts_splits/fintexts_1/BA/val.json
+    freq:       fintexts
+    categories: ['correct', 'incorrect', 'irrelevant']
+
+  - name:       COST
+    train_json: datasets/fintexts_splits/fintexts_1/COST/train.json
+    val_json:   datasets/fintexts_splits/fintexts_1/COST/val.json
+    freq:       fintexts
+    categories: ['correct', 'incorrect', 'irrelevant']
+
+  - name:       DIS
+    train_json: datasets/fintexts_splits/fintexts_1/DIS/train.json
+    val_json:   datasets/fintexts_splits/fintexts_1/DIS/val.json
+    freq:       fintexts
+    categories: ['correct', 'incorrect', 'irrelevant']
+
+  - name:       GOOGL
+    train_json: datasets/fintexts_splits/fintexts_1/GOOGL/train.json
+    val_json:   datasets/fintexts_splits/fintexts_1/GOOGL/val.json
+    freq:       fintexts
+    categories: ['correct', 'incorrect', 'irrelevant']
+
+  - name:       INTC
+    train_json: datasets/fintexts_splits/fintexts_1/INTC/train.json
+    val_json:   datasets/fintexts_splits/fintexts_1/INTC/val.json
+    freq:       fintexts
+    categories: ['correct', 'incorrect', 'irrelevant']
+
+  - name:       NFLX
+    train_json: datasets/fintexts_splits/fintexts_1/NFLX/train.json
+    val_json:   datasets/fintexts_splits/fintexts_1/NFLX/val.json
+    freq:       fintexts
+    categories: ['correct', 'incorrect', 'irrelevant']
+
+  - name:       T
+    train_json: datasets/fintexts_splits/fintexts_1/T/train.json
+    val_json:   datasets/fintexts_splits/fintexts_1/T/val.json
+    freq:       fintexts
+    categories: ['correct', 'incorrect', 'irrelevant']
+
+  # - name:       IBM
+  #   train_json: datasets/fintexts_splits/fintexts_1/IBM/train.json
+  #   val_json:   datasets/fintexts_splits/fintexts_1/IBM/val.json
+  #   freq:       fintexts
+  #   categories: ['correct', 'incorrect', 'irrelevant']
+
+  # - name:       JPM
+  #   train_json: datasets/fintexts_splits/fintexts_1/JPM/train.json
+  #   val_json:   datasets/fintexts_splits/fintexts_1/JPM/val.json
+  #   freq:       fintexts
+  #   categories: ['correct', 'incorrect', 'irrelevant']
+
+  - name:       NVDA
+    train_json: datasets/fintexts_splits/fintexts_1/NVDA/train.json
+    val_json:   datasets/fintexts_splits/fintexts_1/NVDA/val.json
+    freq:       fintexts
+    categories: ['correct', 'incorrect', 'irrelevant']
+
+  # - name:       PFE
+  #   train_json: datasets/fintexts_splits/fintexts_1/PFE/train.json
+  #   val_json:   datasets/fintexts_splits/fintexts_1/PFE/val.json
+  #   freq:       fintexts
+  #   categories: ['correct', 'incorrect', 'irrelevant']
+
+  - name:       TSLA
+    train_json: datasets/fintexts_splits/fintexts_1/TSLA/train.json
+    val_json:   datasets/fintexts_splits/fintexts_1/TSLA/val.json
+    freq:       fintexts
+    categories: ['correct', 'incorrect', 'irrelevant']

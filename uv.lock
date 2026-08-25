@@ -1011,7 +1011,6 @@ dependencies = [
     { name = "typing-inspection", marker = "sys_platform == 'linux'" },
     { name = "urllib3", marker = "sys_platform == 'linux'" },
     { name = "wadler-lindig", marker = "sys_platform == 'linux'" },
-    { name = "wandb", marker = "sys_platform == 'linux'" },
     { name = "wcwidth", marker = "sys_platform == 'linux'" },
     { name = "yarl", marker = "sys_platform == 'linux'" },
 ]
@@ -1143,7 +1142,6 @@ requires-dist = [
     { name = "typing-inspection", specifier = "==0.4.2" },
     { name = "urllib3", specifier = "==2.6.3" },
     { name = "wadler-lindig", specifier = "==0.1.7" },
-    { name = "wandb", specifier = "==0.26.0" },
     { name = "wcwidth", specifier = "==0.6.0" },
     { name = "yarl", specifier = "==1.23.0" },
 ]
@@ -2214,30 +2212,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/1e/67/cbae4bf7683a64755c2c1778c418fea96d00e34395bb91743f08bd951571/wadler_lindig-0.1.7.tar.gz", hash = "sha256:81d14d3fe77d441acf3ebd7f4aefac20c74128bf460e84b512806dccf7b2cd55", size = 15842, upload-time = "2025-06-18T07:00:42.843Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8d/96/04e7b441807b26b794da5b11e59ed7f83b2cf8af202bd7eba8ad2fa6046e/wadler_lindig-0.1.7-py3-none-any.whl", hash = "sha256:e3ec83835570fd0a9509f969162aeb9c65618f998b1f42918cfc8d45122fe953", size = 20516, upload-time = "2025-06-18T07:00:41.684Z" },
-]
-
-[[package]]
-name = "wandb"
-version = "0.26.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "click", marker = "sys_platform == 'linux'" },
-    { name = "gitpython", marker = "sys_platform == 'linux'" },
-    { name = "packaging", marker = "sys_platform == 'linux'" },
-    { name = "platformdirs", marker = "sys_platform == 'linux'" },
-    { name = "protobuf", marker = "sys_platform == 'linux'" },
-    { name = "pydantic", marker = "sys_platform == 'linux'" },
-    { name = "pyyaml", marker = "sys_platform == 'linux'" },
-    { name = "requests", marker = "sys_platform == 'linux'" },
-    { name = "sentry-sdk", marker = "sys_platform == 'linux'" },
-    { name = "typing-extensions", marker = "sys_platform == 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/93/82/911948663ddf9e5ec6bc5cde19b0fffcb23c4b64a546bf5c084fde76c4cb/wandb-0.26.0.tar.gz", hash = "sha256:0356853895b53fe110e2ed17a1d49c15405498f08e5fbc339deab384f2df45f1", size = 42120837, upload-time = "2026-04-13T19:42:47.282Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/45/a6/940ca459d70c7cce7a6f7b395809f8ed051a25b2ce696fb93694c77f065f/wandb-0.26.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:a17aae051a31831388cff880251c1b5bc38fbf6a283a0ee7c543709e8e9633d1", size = 25352442, upload-time = "2026-04-13T19:42:29.438Z" },
-    { url = "https://files.pythonhosted.org/packages/4f/a8/55325da4b240d07ba2a8e1949a05b5942dd3346e14f7fd5e3cc72e46a648/wandb-0.26.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:28a14ffc014e523498d077dfde12839b7be586ca8c3190e72e7167c1aea6ee4c", size = 27177821, upload-time = "2026-04-13T19:42:32.055Z" },
-    { url = "https://files.pythonhosted.org/packages/c4/84/e4b0636a3e921e2cffb159b57b5a83787475993e2b5adb6181fbf7712a59/wandb-0.26.0-py3-none-musllinux_1_2_aarch64.whl", hash = "sha256:fb9a63babeee044fecf65a4675f7dfb0efaea4986e498a3bc8f948558af877e7", size = 25522688, upload-time = "2026-04-13T19:42:34.625Z" },
-    { url = "https://files.pythonhosted.org/packages/dd/f0/821a451110dd5f5c39358752abbdcb56c4fcebcc41039c7dcd4b024d2e27/wandb-0.26.0-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:3eb88fb556a64bf4492cf571bb851d47871901c096f0540d841ccb50f5cbeb66", size = 27486467, upload-time = "2026-04-13T19:42:37.119Z" },
 ]
 
 [[package]]

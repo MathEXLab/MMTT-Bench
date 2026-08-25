@@ -16,9 +16,9 @@ compute_kwargs:
   strategy: discrete
 
 metrics:
-  mutual_information:
-    n_neighbours: 1
-    n_subsample_reps:  20
+  # mutual_information:
+  #   n_neighbours: 1
+  #   n_subsample_reps:  20
   mine:
     mine_iters: 500
     n_bootstrap: 20
@@ -29,14 +29,14 @@ metrics:
     n_iters:     500
     batch_size:  64      # ceiling on MI = log(64) ≈ 4.2 nats
     lr:          0.001
-  cca:
-    n_bootstrap: 20    # same as KSG for fair variance comparison
-    eps: 1e-5   
-  v_information:
-    cv: 5
-    n_bootstrap:  20
-  pid:
-    n_clusters_ts:   4
-    n_clusters_text: 5
-    n_bins_y:        4
-    n_bootstrap:  20
+  # cca:
+  #   n_bootstrap: 20    # same as KSG for fair variance comparison
+  #   eps: 1e-5   
+  # v_information:
+  #   cv: 5
+  #   n_bootstrap:  20
+  # pid:
+  #   n_clusters_ts:   4
+  #   n_clusters_text: 5
+  #   n_bins_y:        4
+  #   n_bootstrap:  20

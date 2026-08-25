@@ -5,9 +5,13 @@ Visualisation
 All plot functions accept save_path=None (show) or a filepath (save).
 """
 
+import textwrap
+
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch, Rectangle
 from matplotlib.ticker import ScalarFormatter
 from scipy.stats import spearmanr
 
@@ -286,70 +290,6 @@ CAT_X_MAP = {
     'mixture_75_irrelevant':  25,
 }
 
-def plot_mi_per_category(
-    category_data: dict,
-    results:       dict,
-    metrics:       list,
-    save_path:     str = None,
-) -> tuple[dict, dict]:
-    """
-    Bar chart of bootstrapped MI ± std per annotation category.
-
-    Parameters
-    ----------
-    category_data : {cat: {'ts', 'y', 'x'}} — used only for cat ordering
-    results       : output of MutualInformationMetric.compute() or
-                    a compatible metric — same dict structure
-    save_path     : filepath to save, or None to plt.show()
-
-    Returns
-    -------
-    (means, stds) dicts — {metric: {cat: value}}
-    """
-    cats    = list(category_data.keys())
-
-    means = {m: {c: np.mean(results[m][c]) for c in cats} for m in metrics}
-    stds  = {m: {c: np.std(results[m][c])  for c in cats} for m in metrics}
-
-    fig, axes = plt.subplots(1, 4, figsize=(16, 4.8), sharey=False)
-    fig.patch.set_facecolor('white')
-
-    x_pos = np.arange(len(cats))
-    width = 0.6
-
-    for ax, metric in zip(axes, metrics):
-        m_means = [means[metric][c] for c in cats]
-        m_stds  = [stds[metric][c]  for c in cats]
-        colors  = [CAT_COLORS.get(c, '#888888') for c in cats]
-
-        ax.bar(x_pos, m_means, width=width, color=colors,
-               alpha=0.85, zorder=3)
-        ax.errorbar(x_pos, m_means, yerr=m_stds, fmt='none',
-                    color='#333333', capsize=4, capthick=1.0,
-                    elinewidth=1.0, zorder=4)
-        ax.axhline(0, color='#aaaaaa', lw=0.8, zorder=2)
-
-        if metric == 'conditional':
-            ax.axhspan(-0.05, 0.05, color='#eeeeee', zorder=1,
-                       label='≈ zero band')
-
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels(
-            [CAT_LABELS.get(c, c) for c in cats],
-            rotation=35, ha='right', fontsize=8,
-        )
-        ax.set_ylabel('MI (nats)', fontsize=9)
-        ax.set_title(METRIC_LABELS.get(metric, metric), fontsize=10, pad=8)
-        ax.grid(axis='y', lw=0.4, alpha=0.5, zorder=0)
-        for sp in ['top', 'right']:
-            ax.spines[sp].set_visible(False)
-
-    fig.suptitle('MI per annotation category',
-                 fontsize=11, fontweight='normal', y=1.02)
-    plt.tight_layout()
-    _save_or_show(save_path)
-
-    return means, stds
 
 # plot_2d_embeddings 
 # Shows whether categories cluster in the text embedding space.
@@ -426,123 +366,11 @@ def plot_2d_embeddings(
         else:
             path = None
         _save_or_show(path)
-
-def plot_pmi_by_phase(pmi_results, title="Mean PMI by phase and text category",
-                      ylabel="Mean PMI", figsize=(11, 4.5), savepath=None):
-    # ── fix key if user accidentally used 'incorrect' twice ──────────────────
-    cats = list(pmi_results.keys())
-    phases = list(next(iter(pmi_results.values())).keys())
-    phase_labels = [PHASE_LABELS.get(p, p) for p in phases]
-
-    n_cats   = len(cats)
-    n_phases = len(phases)
-    width    = 0.22 if len(cats)==3 else 0.05
-    offsets  = np.linspace(-(n_cats - 1) / 2 * width,
-                            (n_cats - 1) / 2 * width, n_cats)
-    x = np.arange(n_phases)
-
-    fig, ax = plt.subplots(figsize=figsize)
-    fig.patch.set_facecolor("white")
-    ax.set_facecolor("white")
-
-    for offset, cat in zip(offsets, cats):
-        means = np.array([pmi_results[cat][p]["mean"] for p in phases])
-        stds  = np.array([pmi_results[cat][p]["std"]  for p in phases])
-        ns    = np.array([pmi_results[cat][p]["n"]    for p in phases])
-        sems  = stds / np.sqrt(ns)          # use SEM for error bars; swap for std if preferred
-
-        color = CAT_COLORS.get(cat, "#888")
-        ax.bar(x + offset, means, width * 0.9,
-               color=color, alpha=0.85, label=CAT_LABELS.get(cat, cat), zorder=3)
-        ax.errorbar(x + offset, means, yerr=sems,
-                    fmt="none", color="#333", capsize=4, capthick=1,
-                    elinewidth=1, zorder=4)
-
-    ax.axhline(0, color="#aaa", lw=0.8, zorder=2)
-    ax.set_xticks(x)
-    ax.set_xticklabels(phase_labels, fontsize=10)
-    ax.set_ylabel(ylabel, fontsize=11)
-    ax.set_title(title, fontsize=12, pad=10)
-    ax.legend(frameon=False, fontsize=10)
-    ax.spines[["top", "right"]].set_visible(False)
-    ax.grid(axis="y", color="#eee", zorder=0)
-
-    plt.tight_layout()
-    if savepath:
-        plt.savefig(savepath, dpi=300, bbox_inches="tight", facecolor="white")
-    plt.show()
-
-
 def _apply_sci_x(ax) -> None:
     """Scientific notation on x-axis when values fall outside [1e-3, 1e3]."""
     fmt = ScalarFormatter(useMathText=True)
     fmt.set_powerlimits((-3, 3))
     ax.xaxis.set_major_formatter(fmt)
-
-
-def plot_info_vs_delta(
-    tables:      dict,
-    info_metrics: list[str],
-    scores_dict:  dict,
-    perf_metric:  str = "delta_r2",
-    title:        str = "Information Metric vs Change in Model Performance",
-    save_path=None,
-) -> None:
-    """Scatter: info metric (x) vs performance metric (y), one panel per info metric."""
-    n_info = len(info_metrics)
-    if not tables or n_info == 0:
-        return
-
-    n_rows, n_cols = (2, 3) if n_info > 3 else (1, n_info)
-    fig, axes = plt.subplots(n_rows, n_cols,
-                             figsize=(5.0 * n_cols, 5.0 * n_rows), squeeze=False)
-    fig.patch.set_facecolor("white")
-
-    for _row, (model_name, df) in enumerate(tables.items()):
-        for col, info_m in enumerate(info_metrics):
-            ax = axes[PLOT_POS[info_m][0]][PLOT_POS[info_m][1]] if n_rows > 1 else axes[0][col]
-            if info_m not in df.columns or perf_metric not in df.columns:
-                ax.set_visible(False)
-                continue
-            for cat in df.index:
-                x_val = df.loc[cat, info_m]
-                y_val = df.loc[cat, perf_metric]
-                if np.isnan(x_val) or np.isnan(y_val):
-                    continue
-                ax.scatter(x_val, y_val, facecolors='none',
-                           edgecolors=CAT_COLORS.get(cat, "#888"),
-                           zorder=3, s=150,
-                           label=CAT_LABELS.get(cat, cat),
-                           marker=MODEL_MARKERS.get(model_name, 'o'))
-                if _row == 1:
-                    ax.annotate(CAT_LABELS.get(cat, cat), (x_val, y_val),
-                                textcoords="offset points", xytext=(6, 4),
-                                color=CAT_COLORS.get(cat, "#888"))
-            ax.axhline(0, color="#aaa", lw=0.8, ls="--")
-            ax.axvline(0, color="#aaa", lw=0.8, ls="--")
-            ax.set_xlabel(INFO_METRIC_LABEL.get(info_m, info_m))
-            ax.set_ylabel(PERF_METRIC_LABEL.get(perf_metric, perf_metric))
-            ax.set_title(METRIC_DISPLAY.get(info_m, info_m), pad=6)
-            _apply_sci_x(ax)
-            ax.grid(lw=0.4, alpha=0.4)
-            for sp in ["top", "right"]:
-                ax.spines[sp].set_visible(False)
-
-    fig.suptitle(title, fontweight="normal", y=1.01)
-    def _score_label(m):
-        s = scores_dict.get(m)
-        return f"{m}  score={round(s, 4)}" if s is not None else m
-    model_legend = [
-        Line2D([0], [0], marker=MODEL_MARKERS[m], color='black',
-               label=_score_label(m),
-               markerfacecolor='w', markersize=10)
-        for m in MODEL_MARKERS if m in scores_dict
-    ]
-    fig.legend(handles=model_legend, handlelength=0, loc='outside lower center',
-               bbox_to_anchor=(0.5, -0.15), ncol=6,
-               title='Model / fusion method with baseline score (time series only)')
-    plt.tight_layout()
-    _save_or_show(save_path)
 
 
 def plot_correlation_trends(
@@ -689,50 +517,6 @@ def plot_correlation_trends(
     fig.legend(handles=cat_legend, loc='outside lower center',
                bbox_to_anchor=(0.88, -0.18),#bbox_to_anchor=(0.85, -0.15), 
                ncol=1, title='Category (point colour)')
-    plt.tight_layout()
-    _save_or_show(save_path)
-
-
-def plot_delta_bars(
-    tables:      dict,
-    perf_metric: str = "delta_r2",
-    title:       str = "",
-    save_path=None,
-) -> None:
-    """Grouped bar chart: performance metric per category, one group per model."""
-    model_names = list(tables.keys())
-    if not model_names:
-        return
-
-    sample_df = next(iter(tables.values()))
-    cats = [c for c in sample_df.index
-            if not np.isnan(sample_df.loc[c, perf_metric])]
-    if not cats:
-        cats = list(sample_df.index)
-
-    n_models = len(model_names)
-    x        = np.arange(len(cats))
-    width    = 0.7 / n_models
-
-    fig, ax = plt.subplots(figsize=(max(6, 2.5 * len(cats)), 4.5))
-    fig.patch.set_facecolor("white")
-
-    for i, model_name in enumerate(model_names):
-        df     = tables[model_name]
-        means  = [df.loc[c, perf_metric] if c in df.index else np.nan for c in cats]
-        offset = (i - n_models / 2 + 0.5) * width
-        ax.bar(x + offset, means, width=width * 0.9, label=model_name, alpha=0.82, zorder=3)
-
-    ax.axhline(0, color="#444", lw=0.9, zorder=2)
-    ax.set_xticks(x)
-    ax.set_xticklabels([CAT_LABELS.get(c, c) for c in cats], rotation=30, ha="right")
-    ax.set_ylabel(PERF_METRIC_LABEL.get(perf_metric, perf_metric))
-    ax.set_title(title or f"{perf_metric} by category and model")
-    ax.legend(frameon=True)
-    ax.grid(axis="y", lw=0.4, alpha=0.5)
-    for sp in ["top", "right"]:
-        ax.spines[sp].set_visible(False)
-
     plt.tight_layout()
     _save_or_show(save_path)
 
@@ -912,364 +696,419 @@ def _mi_metrics(results: dict) -> list[str]:
 # Single-experiment plots
 # ---------------------------------------------------------------------------
 
-def plot_single_bar(results: dict, title: str = "", save_path=None):
-    """Bar chart of mean ± std per category for each metric."""
-    metrics = _mi_metrics(results)
-    cats    = list(next(iter(results[metrics[0]].values().__class__,
-                             results[metrics[0]]).keys())
-                   if False else results[metrics[0]].keys())
-
-    fig, axes = plt.subplots(1, len(metrics), figsize=(4.5 * len(metrics), 4.8))
-    if len(metrics) == 1:
-        axes = [axes]
-    fig.patch.set_facecolor("white")
-
-    x_pos = np.arange(len(cats))
-
-    for ax, metric in zip(axes, metrics):
-        mean_key = f"{metric}_mean"
-        std_key  = f"{metric}_std"
-
-        if mean_key in results:
-            means = [results[mean_key][c] for c in cats]
-            stds  = [results[std_key][c]  for c in cats]
-        else:
-            means = [float(np.mean(results[metric][c])) for c in cats]
-            stds  = [float(np.std(results[metric][c]))  for c in cats]
-
-        colors = [CAT_COLORS.get(c, "#888") for c in cats]
-        ax.bar(x_pos, means, width=0.6, color=colors, alpha=0.85, zorder=3)
-        ax.errorbar(x_pos, means, yerr=stds, fmt="none",
-                    color="#333", capsize=4, capthick=1, elinewidth=1, zorder=4)
-        ax.axhline(0, color="#aaa", lw=0.8, zorder=2)
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels([CAT_LABELS.get(c, c) for c in cats],
-                           rotation=35, ha="right")
-        ax.set_ylabel("MI (nats)" if "MI" not in metric else metric)
-        ax.set_title(METRIC_LABELS.get(metric, metric), pad=8)
-        ax.grid(axis="y", lw=0.4, alpha=0.5)
-        for sp in ["top", "right"]:
-            ax.spines[sp].set_visible(False)
-
-    fig.suptitle(title or "MI per annotation category",
-                 fontweight="normal", y=1.02)
-    plt.tight_layout()
-    _save_or_show(save_path)
-
-
-def print_single_table(results: dict, label: str = ""):
-    """Print a compact table of mean ± std per category / metric."""
-    metrics = _mi_metrics(results)
-    cats    = list(results[metrics[0]].keys())
-
-    header = f"{'':25}" + "".join(f"{m:>14}" for m in metrics)
-    print(f"\n{'─' * len(header)}")
-    if label:
-        print(label)
-    print(header)
-    print("─" * len(header))
-
-    for cat in cats:
-        row = f"{CAT_LABELS.get(cat, cat):25}"
-        for m in metrics:
-            mean_key = f"{m}_mean"
-            if mean_key in results:
-                mean = results[mean_key][cat]
-                std  = results[f"{m}_std"][cat]
-            else:
-                vals = results[m][cat]
-                mean, std = float(np.mean(vals)), float(np.std(vals))
-            row += f"  {mean:+.4f}±{std:.3f}"
-        print(row)
-
-    print("─" * len(header))
-
 
 # ---------------------------------------------------------------------------
 # Sweep plots (grouped bar charts — one group per sweep value, one bar per category)
 # ---------------------------------------------------------------------------
-
-def _sweep_bar_data(runs: list, metric: str, cat: str):
-    """Extract (means, stds) arrays across sweep runs for one metric + category."""
-    mean_key = f"{metric}_mean"
-    std_key  = f"{metric}_std"
-    means, stds = [], []
-    for run in runs:
-        r = run["results"]
-        if mean_key in r:
-            means.append(r[mean_key][cat])
-            stds.append(r[std_key][cat])
-        else:
-            vals = r[metric][cat]
-            means.append(float(np.mean(vals)))
-            stds.append(float(np.std(vals)))
-    return np.array(means), np.array(stds)
-
-
-def _sweep_grouped_bars(ax, runs, values, metric, cats, ylabel=""):
-    """Draw grouped bars on ax: groups = sweep values, bars = categories."""
-    n_vals = len(values)
-    n_cats = len(cats)
-    width  = 0.7 / n_cats
-    x      = np.arange(n_vals)
-
-    for i, cat in enumerate(cats):
-        means, stds = _sweep_bar_data(runs, metric, cat)
-        offset = (i - n_cats / 2 + 0.5) * width
-        col = CAT_COLORS.get(cat, "#888")
-        ax.bar(x + offset, means, width * 0.9, color=col, alpha=0.85,
-               label=CAT_LABELS.get(cat, cat), zorder=3)
-        ax.errorbar(x + offset, means, yerr=stds, fmt="none",
-                    color="#333", capsize=3, capthick=1, elinewidth=1, zorder=4)
-
-    ax.axhline(0, color="#aaa", lw=0.8, zorder=2)
-    ax.set_xticks(x)
-    ax.set_xticklabels([str(v) for v in values], rotation=35, ha="right")
-    if ylabel:
-        ax.set_ylabel(ylabel,)
-    ax.grid(axis="y", lw=0.4, alpha=0.5)
-    for sp in ["top", "right"]:
-        ax.spines[sp].set_visible(False)
-
-
-def plot_sweep_lines(data: dict, metric: str = "conditional",
-                     title: str = "", save_path=None):
-    """Bar chart: sweep values on x-axis, one bar per annotation category per sweep value."""
-    runs   = data["runs"]
-    param  = data["sweep_param"]
-    values = data["sweep_values"]
-    cats   = list(runs[0]["results"][metric].keys())
-
-    fig, ax = plt.subplots(figsize=(max(6, 1.6 * len(values)), 4.8))
-    fig.patch.set_facecolor("white")
-
-    _sweep_grouped_bars(ax, runs, values, metric, cats, ylabel="MI (nats)")
-    ax.set_xlabel(param,)
-    ax.set_title(title or f"{METRIC_LABELS.get(metric, metric)} — {param}")
-    ax.legend( frameon=True)
-
-    plt.tight_layout()
-    _save_or_show(save_path)
-
-
-def plot_sweep_all_metrics(data: dict, title: str = "", save_path=None):
-    """One panel per MI metric, grouped bar chart per sweep value."""
-    runs    = data["runs"]
-    param   = data["sweep_param"]
-    values  = data["sweep_values"]
-    metrics = _mi_metrics(runs[0]["results"])
-    cats    = list(runs[0]["results"][metrics[0]].keys())
-
-    panel_w = max(4.5, 1.2 * len(values))
-    fig, axes = plt.subplots(1, len(metrics), figsize=(panel_w * len(metrics), 4.8))
-    if len(metrics) == 1:
-        axes = [axes]
-    fig.patch.set_facecolor("white")
-
-    for ax, metric in zip(axes, metrics):
-        _sweep_grouped_bars(ax, runs, values, metric, cats, ylabel="MI (nats)")
-        ax.set_xlabel(param)
-        ax.set_xticklabels([MODEL_DISPLAY.get(value, value) for value in values])
-        ax.set_title(METRIC_LABELS.get(metric, metric), pad=8)
-        ax.legend( frameon=True)
-
-    fig.suptitle(title or f"MI sensitivity to {param}",
-                 fontweight="normal", y=1.02)
-    plt.tight_layout()
-    _save_or_show(save_path)
-
-
-def print_sweep_table(data: dict):
-    """Print best value per category across the sweep."""
-    runs    = data["runs"]
-    param   = data["sweep_param"]
-    values  = data["sweep_values"]
-    metrics = _mi_metrics(runs[0]["results"])
-    cats    = list(runs[0]["results"][metrics[0]].keys())
-
-    print(f"\n{'─' * 80}")
-    print(f"Sweep: {param} over {values}")
-    print(f"{'─' * 80}")
-
-    for metric in metrics:
-        mean_key = f"{metric}_mean"
-        print(f"\n  {METRIC_LABELS.get(metric, metric)}")
-        header = f"  {'':25}" + "".join(f"{str(v):>10}" for v in values)
-        print(header)
-        for cat in cats:
-            row = f"  {CAT_LABELS.get(cat, cat):25}"
-            for run in runs:
-                r = run["results"]
-                if mean_key in r:
-                    row += f"  {r[mean_key][cat]:+.4f}"
-                else:
-                    row += f"  {float(np.mean(r[metric][cat])):+.4f}"
-            print(row)
-
-    print(f"\n{'─' * 80}")
 
 
 # ---------------------------------------------------------------------------
 # Overlay: compare multiple sweeps on one plot
 # ---------------------------------------------------------------------------
 
-def plot_overlay(datasets: list[dict], labels: list[str],
-                 metric: str = "conditional", save_path=None):
-    """
-    Compare multiple sweep results — grouped bars where groups are sweep values
-    and each bar is a different label (run/config). Shows the 'correct' category
-    only so the comparison stays readable.
-    """
-    OVERLAY_COLORS = ["#1D9E75", "#D85A30", "#2980B9", "#7F8C8D",
-                      "#8E44AD", "#E67E22", "#C0392B"]
-
-    param  = datasets[0]["sweep_param"]
-    values = datasets[0]["sweep_values"]
-
-    # Detect which category key is present in the first run
-    first_results = datasets[0]["runs"][0]["results"]
-    cat = next((c for c in ("correct", "relevant_correct") if c in first_results.get(metric, {})),
-               list(first_results.get(metric, {}).keys())[0])
-
-    n_vals   = len(values)
-    n_labels = len(labels)
-    width    = 0.7 / n_labels
-    x        = np.arange(n_vals)
-    mean_key = f"{metric}_mean"
-    std_key  = f"{metric}_std"
-
-    fig, ax = plt.subplots(figsize=(max(6, 1.6 * n_vals), 4.8))
-    fig.patch.set_facecolor("white")
-
-    for i, (data, label) in enumerate(zip(datasets, labels)):
-        means, stds = _sweep_bar_data(data["runs"], metric, cat)
-        offset = (i - n_labels / 2 + 0.5) * width
-        col = OVERLAY_COLORS[i % len(OVERLAY_COLORS)]
-        ax.bar(x + offset, means, width * 0.9, color=col, alpha=0.85,
-               label=label, zorder=3)
-        ax.errorbar(x + offset, means, yerr=stds, fmt="none",
-                    color="#333", capsize=3, capthick=1, elinewidth=1, zorder=4)
-
-    ax.axhline(0, color="#aaa", lw=0.8, zorder=2)
-    ax.set_xticks(x)
-    ax.set_xticklabels([str(v) for v in values], rotation=35, ha="right")
-    ax.set_xlabel(param)
-    ax.set_ylabel("MI (nats)")
-    ax.set_title(f"{METRIC_LABELS.get(metric, metric)} — {CAT_LABELS.get(cat, cat)}",)
-    ax.legend(frameon=True)
-    ax.grid(axis="y", lw=0.4, alpha=0.5)
-    for sp in ["top", "right"]:
-        ax.spines[sp].set_visible(False)
-
-    plt.tight_layout()
-    _save_or_show(save_path)
-
 
 # ---------------------------------------------------------------------------
 # Multi-metric conditional comparison (default single-file view)
 # ---------------------------------------------------------------------------
-
-def plot_conditional_comparison(
-    results_by_metric: dict,
-    title: str = "",
-    save_path=None,
-):
-    """
-    One panel per metric showing only the conditional submetric,
-    with bars per annotation category (mean ± std).
-
-    Conditional keys used:
-        mutual_information → conditional
-        pid                → unique_text
-        v_information      → v_conditional
-    """
-    metric_names = list(results_by_metric.keys())
-    n = len(metric_names)
-    fig, axes = plt.subplots(1, n, figsize=(4.5 * n, 4.8))
-    if n == 1:
-        axes = [axes]
-    fig.patch.set_facecolor("white")
-
-    for ax, mname in zip(axes, metric_names):
-        results  = results_by_metric[mname]
-        ckey     = CONDITIONAL_KEY.get(mname, "conditional")
-        # Fall back gracefully if key missing
-        if ckey not in results:
-            ax.set_visible(False)
-            continue
-
-        cats     = list(results[ckey].keys())
-        x_pos    = np.arange(len(cats))
-        mean_key = f"{ckey}_mean"
-        std_key  = f"{ckey}_std"
-
-        if mean_key in results:
-            means = [results[mean_key][c] for c in cats]
-            stds  = [results[std_key][c]  for c in cats]
-        else:
-            means = [float(np.mean(results[ckey][c])) for c in cats]
-            stds  = [float(np.std(results[ckey][c]))  for c in cats]
-
-        colors = [CAT_COLORS.get(c, "#888") for c in cats]
-        ax.bar(x_pos, means, width=0.6, color=colors, alpha=0.85, zorder=3)
-        ax.errorbar(x_pos, means, yerr=stds, fmt="none",
-                    color="#333", capsize=4, capthick=1, elinewidth=1, zorder=4)
-        ax.axhline(0, color="#aaa", lw=0.8, zorder=2)
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels([CAT_LABELS.get(c, c) for c in cats],
-                           rotation=35, ha="right")
-        ax.set_ylabel(CONDITIONAL_LABEL.get(mname, ckey))
-        ax.set_title(METRIC_DISPLAY.get(mname, mname), pad=8)
-        ax.grid(axis="y", lw=0.4, alpha=0.5)
-        for sp in ["top", "right"]:
-            ax.spines[sp].set_visible(False)
-
-    fig.suptitle(title or "Conditional text contribution per annotation category",
-                 fontweight="normal", y=1.02)
-    plt.tight_layout()
-    _save_or_show(save_path)
 
 
 # ---------------------------------------------------------------------------
 # Multi-metric conditional sweep (default sweep view)
 # ---------------------------------------------------------------------------
 
-def plot_conditional_sweep(
-    runs_by_metric: dict,
-    sweep_param:    str,
-    sweep_values:   list,
-    title:          str = "",
-    save_path=None,
-):
+
+# ---------------------------------------------------------------------------
+# Figure 2 — representation-pipeline robustness
+#
+# Both panels were originally built in plot.ipynb from hand-transcribed numbers.
+# They are derived from the sweep result JSONs here so the figure cannot drift
+# from Tables 4-7.
+# ---------------------------------------------------------------------------
+
+# Verdict codes, in the order the colormap below expects them.
+ORDER_HELD      = 2   # correct > incorrect > irrelevant  (the designed ordering)
+ORDER_SWAPPED   = 0   # correct > irrelevant > incorrect  (incorrect/irrelevant blind)
+ORDER_NEGATIVE  = 1   # some category is negative by more than its bootstrap std
+
+_ORDER_COLORS = ['#B4B2A9', '#E24B4A', '#1D9E75']   # swapped, negative, held
+_ORDER_LABELS = {
+    ORDER_HELD:     'Correct > Incorrect > Irrelevant',
+    ORDER_SWAPPED:  'Correct > Irrelevant > Incorrect',
+    ORDER_NEGATIVE: r'MI < 0 and |MI| > bootstrap std',
+}
+
+
+def _cond_mean_std(md: dict, est: str, cat: str) -> tuple[float, float]:
+    """Conditional MI and its bootstrap std, in each estimator's own terms."""
+    if est == 'pid':
+        v = np.asarray(md['unique_text'][cat], dtype=float)
+        return float(v.mean()), float(v.std())
+    pre = 'v_' if est == 'v_information' else ''
+    return (float(md[f'{pre}conditional_mean'][cat]),
+            float(md[f'{pre}conditional_std'][cat]))
+
+
+def ordering_verdict(md: dict, est: str) -> int:
+    """Classify one (estimator, setting) cell for the Figure 2 grid.
+
+    Negative-by-more-than-noise takes precedence: an estimate that has gone
+    negative is not reporting an ordering at all, it is reporting a broken
+    estimate, and that is the more useful thing to show.
     """
-    One panel per metric, grouped bar chart: sweep values on x-axis,
-    one bar per annotation category. Shows only the conditional submetric.
+    vals = {c: _cond_mean_std(md, est, c) for c in ('correct', 'incorrect', 'irrelevant')}
+    if any(m < 0 and abs(m) > s for m, s in vals.values()):
+        return ORDER_NEGATIVE
+    c, i, r = (vals[k][0] for k in ('correct', 'incorrect', 'irrelevant'))
+    return ORDER_HELD if c > i > r else ORDER_SWAPPED
+
+
+def plot_ordering_grid(panels: list[dict], estimators: list[str] | None = None,
+                       ax_row=None, save_path=None):
+    """Figure 2, left: did the category ordering survive each pipeline setting?
+
+    `panels` is one dict per sweep axis:
+        {'name': 'PCA dim', 'runs': <sweep JSON 'runs' list>,
+         'labels': ['4','8','16','32'], 'chosen': 2}
+    where `chosen` is the index of the setting used in the paper, boxed in the
+    plot. Verdicts are derived per cell by ordering_verdict().
     """
-    metric_names = list(runs_by_metric.keys())
-    n = len(metric_names)
-    panel_w = max(4.5, 1.2 * len(sweep_values))
-    fig, axes = plt.subplots(1, n, figsize=(panel_w * n, 4.8))
-    if n == 1:
-        axes = [axes]
+    estimators = estimators or ['mutual_information', 'mine', 'infonce',
+                                'cca', 'v_information', 'pid']
+    cmap = ListedColormap(_ORDER_COLORS)
+
+    made_fig = ax_row is None
+    if made_fig:
+        fig, ax_row = plt.subplots(
+            1, len(panels), figsize=(5.5, 2.4), sharey=True,
+            gridspec_kw={'width_ratios': [len(p['labels']) for p in panels]})
+        fig.patch.set_facecolor('white')
+    ax_row = np.atleast_1d(ax_row)
+
+    for ax, panel in zip(ax_row, panels):
+        status = np.array([[ordering_verdict(rec['results_by_metric'][e], e)
+                            if e in rec['results_by_metric'] else ORDER_SWAPPED
+                            for rec in panel['runs']]
+                           for e in estimators], dtype=float)
+        ax.imshow(status, cmap=cmap, vmin=0, vmax=2, aspect='auto')
+        ax.set_xticks(range(len(panel['labels'])))
+        ax.set_xticklabels(panel['labels'], fontsize=8)
+        ax.set_xlabel(panel['name'], fontsize=9)
+        ax.set_yticks(range(len(estimators)))
+        ax.set_yticklabels([METRIC_DISPLAY.get(e, e) for e in estimators], fontsize=8)
+        ax.set_xticks(np.arange(-0.5, len(panel['labels']), 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, len(estimators), 1), minor=True)
+        ax.grid(which='minor', color='white', linewidth=1.5)
+        ax.tick_params(which='minor', length=0)
+        for sp in ax.spines.values():
+            sp.set_visible(False)
+        if panel.get('chosen') is not None:      # box the setting the paper uses
+            ax.add_patch(Rectangle((panel['chosen'] - 0.5, -0.5), 1, len(estimators),
+                                   fill=False, edgecolor='black', lw=1.6, zorder=5))
+
+    if made_fig:
+        handles = [Patch(facecolor=_ORDER_COLORS[v], label=_ORDER_LABELS[v])
+                   for v in (ORDER_HELD, ORDER_SWAPPED, ORDER_NEGATIVE)]
+        handles.append(Patch(facecolor='white', edgecolor='black', label='Final parameter choice'))
+        ax_row[0].figure.legend(handles=handles, frameon=False, fontsize=7,
+                                loc='lower center', bbox_to_anchor=(0.5, -0.22), ncol=2)
+        _save_or_show(save_path)
+
+
+def plot_embedding_sensitivity(runs: list[dict], labels: list[str],
+                               estimators: list[str] | None = None,
+                               category: str = 'correct', ax=None, save_path=None):
+    """Figure 2, right: conditional MI for one category across text encoders.
+
+    Estimators are dodged horizontally within each encoder group so points and
+    error bars stay separable. Pass the oracle/dummy run as the final record to
+    reproduce the paper's upper-bound column.
+    """
+    estimators = estimators or ['mutual_information', 'mine', 'infonce',
+                                'cca', 'v_information', 'pid']
+    made_fig = ax is None
+    if made_fig:
+        fig, ax = plt.subplots(figsize=(6.4, 3.2))
+        fig.patch.set_facecolor('white')
+
+    x = np.arange(len(labels), dtype=float)
+    dodge = np.linspace(-0.3, 0.3, len(estimators))
+    for k, est in enumerate(estimators):
+        ys, es = [], []
+        for rec in runs:
+            md = rec['results_by_metric']
+            m, s = _cond_mean_std(md[est], est, category) if est in md else (np.nan, np.nan)
+            ys.append(m); es.append(s)
+        ax.errorbar(x + dodge[k], ys, yerr=es, fmt='o', markersize=4.5,
+                    color=INFO_COLORS.get(est, '#888'), elinewidth=1.1, capsize=2,
+                    label=METRIC_DISPLAY.get(est, est))
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=35, ha='right', fontsize=8)
+    ax.set_ylabel('Conditional MI (nats)', fontsize=9)
+    ax.grid(axis='y', lw=0.4, alpha=0.5, zorder=0)
+    ax.set_axisbelow(True)
+    for sp in ('top', 'right'):
+        ax.spines[sp].set_visible(False)
+    if made_fig:
+        ax.legend(frameon=False, fontsize=7, ncol=2)
+        _save_or_show(save_path)
+
+
+# ---------------------------------------------------------------------------
+# Figure 5 — real-world MI estimates
+# ---------------------------------------------------------------------------
+
+BASELINE = "no_text"                                   # the series-only reference
+CATEGORIES = ["correct", "incorrect", "irrelevant"]     # text corpora, in plot order
+ESTIMATORS = ["mutual_information", "mine", "infonce",
+              "cca", "v_information", "pid"]
+DATASET_LABEL = {"PublicHealth": "Public\nHealth", "SocialGood": "Social\nGood",
+                 "FinTexTS": "FinTexTS\n(10 tickers)"}
+GRID = "#D8D8D8"                                        # shaded-band fill
+
+
+def median_ci(v, n_boot: int = 2000, seed: int = 0):
+    """Median with a 95% percentile-bootstrap interval and the bootstrap standard
+    error of the median. Resampling configurations (not runs) is the right unit:
+    the spread being reported is across architecture x fusion choices, which is
+    what a practitioner faces when picking one."""
+    v = np.asarray(v, dtype=float)
+    if not len(v):
+        return np.nan, np.nan, np.nan, np.nan
+    rng = np.random.default_rng(seed)
+    boots = np.median(rng.choice(v, size=(n_boot, len(v)), replace=True), axis=1)
+    return (float(np.median(v)), float(np.percentile(boots, 2.5)),
+            float(np.percentile(boots, 97.5)), float(np.std(boots)))
+
+
+def _grid_cell(ax) -> None:
+    ax.grid(axis="y", lw=0.4, alpha=0.5, zorder=0)
+    ax.set_axisbelow(True)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    ax.tick_params(labelsize=8)
+    ax.set_xticks([])
+
+def plot_realworld_mi_grid(rows, data, quantity: str = "joint",
+                           show_mse: bool = True, fill_all: bool = False,
+                           save_path=None):
+    """Figure 5 — MI estimates on the real-world datasets.
+
+    Datasets run down the page, estimators across it. Each cell shows the three
+    text corpora against that estimator's series-only value (blue dashed rule);
+    distance from the rule is the information text adds beyond the series.
+
+    Every cell carries its own y-scale, and that is forced rather than chosen: a
+    row is one dataset and would otherwise have to hold KSG (~2 nats) and
+    V-information (~0.03 nats) on one axis. The MSE column is a separate column
+    for the same reason -- percent error and nats are different quantities, and
+    two scales on one axis is the one chart construction that reliably misleads.
+
+    `rows` and `data` come from plot.load_realworld_results().
+    """
+    n_ds, n_est = len(rows), len(ESTIMATORS)
+    pos = np.arange(len(CATEGORIES), dtype=float)
+
+    n_col = n_est + (1 if show_mse else 0)
+    fig = plt.figure(figsize=(1.30 * n_col + 1.9, 0.92 * n_ds + 1.7))
+    gs = fig.add_gridspec(n_ds, n_col,
+                          width_ratios=([1.22] if show_mse else []) + [1.0] * n_est,
+                          hspace=0.16, wspace=0.34)
     fig.patch.set_facecolor("white")
 
-    for ax, mname in zip(axes, metric_names):
-        runs  = runs_by_metric[mname]
-        ckey  = CONDITIONAL_KEY.get(mname, "conditional")
+    def label_row(ax, r):
+        ax.set_ylabel(DATASET_LABEL.get(r["name"], r["name"]).replace("\n", " "),
+                      color='black', fontsize=9, rotation=0, ha="right", va="center",
+                      labelpad=10)
 
-        first_results = runs[0]["results"]
-        if ckey not in first_results:
-            ax.set_visible(False)
-            continue
-        cats = list(first_results[ckey].keys())
+    for i, r in enumerate(rows):
+        # ── left column: what the models did ────────────────────────────────
+        ax = fig.add_subplot(gs[i, 0]) if show_mse else None
+        if ax is not None:
+            ax.axhline(0, color=CAT_COLORS[BASELINE], lw=1.6, zorder=3)
+            for k, cat in enumerate(CATEGORIES):
+                v = r["mse"].get(cat)
+                if v is None or not len(v):
+                    continue
+                med, lo, hi, _ = median_ci(v)
+                q25, q75 = np.percentile(v, [25, 75])
+                ax.vlines(pos[k], q25, q75, color=CAT_COLORS[cat], lw=1.3,
+                          alpha=0.55, zorder=4)
+                ax.errorbar(pos[k], med, yerr=[[med - lo], [hi - med]], fmt="none",
+                            ecolor=CAT_COLORS[cat], elinewidth=1.6, capsize=2, zorder=5)
+                ax.scatter(pos[k], med, s=40, facecolors=CAT_COLORS[cat],
+                           edgecolors="white", linewidths=0.8, zorder=6)
+            ax.set_xlim(-0.6, len(CATEGORIES) - 0.4)
+            _grid_cell(ax)
+            ax.yaxis.set_major_locator(plt.MaxNLocator(3))
+            label_row(ax, r)
+            if i == 0:
+                ax.set_title("Downstream MSE\n(% vs no-text)", fontsize=9, color='black',
+                             pad=6, fontweight="bold")
 
-        _sweep_grouped_bars(ax, runs, sweep_values, ckey, cats,
-                            ylabel=CONDITIONAL_LABEL.get(mname, ckey))
-        ax.set_xlabel(sweep_param)
-        ax.set_title(METRIC_DISPLAY.get(mname, mname), pad=8)
-        ax.legend(frameon=True)
+        # ── estimator columns: what the estimators reported ─────────────────
+        for j, est in enumerate(ESTIMATORS):
+            ax = fig.add_subplot(gs[i, j + (1 if show_mse else 0)])
+            entry = data.get(est, {}).get(i, {})
+            # The series-only value is a reference level, not an observation to
+            # be compared alongside the corpora, so it is drawn as a rule.
+            base = entry.get(BASELINE)
+            if base and np.isfinite(base[0]):
+                ax.axhline(base[0], color=CAT_COLORS[BASELINE], lw=1.2,
+                           ls=(0, (3, 2)), alpha=0.9, zorder=2)
+            for k, cat in enumerate(CATEGORIES):
+                v = entry.get(cat)
+                if v is None or not np.isfinite(v[0]):
+                    continue
+                col = CAT_COLORS[cat]
+                err = v[1] if np.isfinite(v[1]) else 0.0
+                ax.errorbar(pos[k], v[0], yerr=err, fmt="none", ecolor=col,
+                            elinewidth=1.3, capsize=2, alpha=0.85, zorder=4)
+                filled = True if fill_all else v[2]
+                ax.scatter(pos[k], v[0], s=40,
+                           facecolors=col if filled else "white",
+                           edgecolors="white" if filled else col,
+                           linewidths=0.8 if filled else 1.3, zorder=5)
+            ax.set_xlim(-0.6, len(CATEGORIES) - 0.4)
+            # A cell whose values are all identical (KSG's exact zeros) autoscales
+            # to a degenerate range and renders blank. Give it a readable window.
+            seen = [entry[c][0] for c in CATEGORIES
+                    if c in entry and np.isfinite(entry[c][0])]
+            if seen and max(seen) - min(seen) < 1e-12:
+                c0 = seen[0]
+                half = max(abs(c0) * 0.5, 0.05)
+                ax.set_ylim(c0 - half, c0 + half)
+            _grid_cell(ax)
+            ax.yaxis.set_major_locator(plt.MaxNLocator(3))
+            if j == 0 and not show_mse:
+                label_row(ax, r)
+            if i == 0:
+                ax.set_title(METRIC_DISPLAY.get(est, est), fontsize=9,
+                             color='black', pad=6, fontweight="bold")
 
-    fig.suptitle(title or "Conditional text contribution — " + sweep_param,
-                 fontweight="normal", y=1.02)
-    plt.tight_layout()
+    handles = [plt.Line2D([], [], color=CAT_COLORS[BASELINE], lw=1.8, ls=(0, (3, 2)),
+                          label="No text (series only)")]
+    handles += [plt.Line2D([], [], marker="o", ls="", markersize=7,
+                           markerfacecolor=CAT_COLORS[c], markeredgecolor="white",
+                           label=c.capitalize()) for c in CATEGORIES]
+    if not fill_all:
+        handles.append(plt.Line2D([], [], marker="o", ls="", markersize=7,
+                                  markerfacecolor="white", markeredgecolor='#555555',
+                                  label="within 1.96σ of baseline"))
+    fig.legend(handles=handles, frameon=False, ncol=5, loc="lower center",
+               bbox_to_anchor=(0.5, 0.995), labelcolor='black', fontsize=9,
+               handlelength=1.0, columnspacing=1.3, handletextpad=0.35)
+
+    caption = (
+        ("Each cell shows the three text corpora against that estimator's series-only value, drawn as a blue "
+         "dashed rule; distance from the rule is the information text adds beyond the series. Marks are the "
+         "raw joint estimate I(X_ts, X_text; Y) in nats with +/-1 bootstrap sigma. " if quantity == "joint" else
+         "Each cell shows the conditional information each text corpus adds beyond the series, "
+         "I(X_text; Y | X_ts), read from the estimator's paired-resample field, in nats with +/-1 bootstrap "
+         "sigma. The blue rule at zero is what a corpus adding nothing would score. ")
+        + ("Left column: median percent change in MSE against no-text with its 95% bootstrap interval, thin "
+           "bar showing the interquartile range across every architecture x fusion configuration; the blue "
+           "rule at zero is the no-text baseline. " if show_mse else "")
+        + ("" if fill_all else
+           "Filled marks differ from the rule by more than 1.96 standard deviations on the paired "
+           "per-resample difference; hollow marks do not. ")
+        + "Every cell has its own y-scale — estimators are not comparable in absolute units"
+        + (" and nats are not comparable with percent error" if show_mse else "")
+        + " — so compare points within a cell, and patterns across cells, never absolute heights."
+    )
+    fig.text(0.0, -0.012, textwrap.fill(caption, 130), fontsize=8, color='#555555', va="top")
+
     _save_or_show(save_path)
+
+
+# ---------------------------------------------------------------------------
+# Figure 1 — the signal and its annotations
+# ---------------------------------------------------------------------------
+
+# Where each callout box sits, in axes fractions: two correct annotations (one
+# at each transition direction), one incorrect and one irrelevant. The three
+# directional ones sit above the axes; irrelevant drops below, where it has room
+# and where its lack of any arrow into a transition point reads clearly.
+_FIG1_CALLOUTS = [
+    ("drop_to_constant",      "correct",    1, (0.16, 1.24)),
+    ("recover_from_constant", "incorrect",  1, (0.50, 1.24)),
+    ("recover_from_constant", "correct",    0, (0.84, 1.24)),
+    ("drop_to_constant",      "irrelevant", 8, (0.50, -0.30)),
+]
+
+
+def _flattened_sine(t_dense, y_dense, x):
+    """The underlying sine with the flat segments cut in, for the dotted guide.
+
+    The dense signal only carries annotation points, so the constant stretches
+    between them are recovered by extending each flat value forward to the next
+    annotation point whenever the gap is a full quarter-cycle.
+    """
+    y = np.sin(x)
+    for v in (-0.5, 0.5):
+        held = [t for t, yy in zip(t_dense, y_dense) if yy == v]
+        flat = []
+        for i in range(len(held) - 1):
+            if round(held[i + 1] - held[i], 2) == round(np.pi / 2, 2):
+                flat += [round(held[i] + k * np.pi / 8, 2) for k in range(4)]
+            else:
+                flat.append(round(held[i], 2))
+        y = [v if round(xx, 2) in flat else yy for xx, yy in zip(x, y)]
+    return y
+
+
+def plot_annotation_example(raw: dict, n_periods: int = 12, callouts: bool = True,
+                            wrap_width: int = 22, save_path=None):
+    """Figure 1 — example text annotations against the signal.
+
+    `raw` is a loaded split JSON (metadata.t / metadata.y plus points). Blue
+    markers are annotation points on the sine; orange are transition points,
+    where the signal has dropped to the constant and the series alone carries no
+    information about the next value, so correct text becomes the only source.
+    """
+    t_dense, y_dense = raw["metadata"]["t"], raw["metadata"]["y"]
+    x = np.arange(0, 50, np.pi / 8)
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    fig.patch.set_facecolor("white")
+    ax.plot(x, _flattened_sine(t_dense, y_dense, x), linestyle=":", color="#4A90D9", lw=1.2)
+    ax.scatter(t_dense, y_dense, s=22, color="#4A90D9", label="signal", zorder=3)
+
+    trans = [p for p in raw["points"]
+             if p["phase"] in ("drop_to_constant", "recover_from_constant")]
+    ax.scatter([p["t"] for p in trans], [p["y"] for p in trans],
+               s=22, color="#E08214", label="transition", zorder=4)
+
+    if callouts:
+        for phase, cat, idx, pos in _FIG1_CALLOUTS:
+            # Restrict to the plotted window first: indexing the full split can
+            # select a point beyond xlim, whose arrow would then point off-plot.
+            pts = [p for p in raw["points"]
+                   if p["phase"] == phase and p["category"] == cat
+                   and 0 <= p["t"] <= n_periods * np.pi]
+            if not pts:
+                continue
+            pt = pts[min(idx, len(pts) - 1)]
+            ax.annotate(
+                textwrap.fill(pt["samples"][0]["text"], width=wrap_width),
+                xy=(pt["t"], pt["y"]), xycoords="data",
+                xytext=pos, textcoords="axes fraction",
+                bbox=dict(boxstyle="round,pad=0.4", fc="white",
+                          ec=CAT_COLORS[cat], lw=2),
+                arrowprops=dict(arrowstyle="->", color="#444",
+                                connectionstyle="arc3,rad=0.15"),
+                fontsize=9, va="center", ha="center")
+
+    ax.set_xlim(0, n_periods * np.pi)
+    ax.legend(loc="lower right", frameon=False, fontsize=9)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    fig.subplots_adjust(top=0.70, bottom=0.30)
+    if save_path:
+        # bbox_inches="tight" crops the callout that sits below the axes, so the
+        # figure is saved with its own margins instead.
+        fig.savefig(save_path, dpi=300, facecolor="white")
+        print(f"Saved → {save_path}")
+        plt.close(fig)
+    else:
+        plt.show()

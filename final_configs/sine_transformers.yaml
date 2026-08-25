@@ -4,11 +4,10 @@
 # data_format: mmtt  — one sample per annotation point (no sliding window),
 # preserving the independence of samples needed for MI comparison.
 #
-# The sine_synergy dataset has four text categories:
+# MMTT-Bench has three text categories:
 #   correct    — text correctly describes the TS signal at that point
 #   incorrect  — text is plausible but describes the wrong direction/magnitude
-#   irrelevant — text is sampled from an entirely different signal
-#   synergy    — text provides information not observable from TS alone
+#   irrelevant — factually true but carries no directional information
 #
 # Running all four lets us directly compare model performance across
 # text quality conditions that the MI benchmark already characterises.
@@ -69,42 +68,36 @@ models:
   - TiDE
   - FiLM
   # - FreTS
-  - Koopa
   - Nonstationary_Transformer
   # - TimeMixer
   # - TimesNet
   # - TSMixer
 
 # ── Datasets ──────────────────────────────────────────────────────────────────
-# Four runs over the same sine_synergy split — one per text category.
+# Three runs over the same benchmark_splits data — one per text category.
 # This mirrors how train_transformer.py loops over input_configs.
 datasets:
   - name:       sine_correct
-    train_json: datasets/sine_synergy/train.json
-    val_json:   datasets/sine_synergy/val.json
+    train_json: datasets/benchmark_splits/train.json
+    val_json:   datasets/benchmark_splits/val.json
     freq:       synthetic
     categories: [correct]
 
   - name:       sine_incorrect
-    train_json: datasets/sine_synergy/train.json
-    val_json:   datasets/sine_synergy/val.json
+    train_json: datasets/benchmark_splits/train.json
+    val_json:   datasets/benchmark_splits/val.json
     freq:       synthetic
     categories: [incorrect]
 
   - name:       sine_irrelevant
-    train_json: datasets/sine_synergy/train.json
-    val_json:   datasets/sine_synergy/val.json
+    train_json: datasets/benchmark_splits/train.json
+    val_json:   datasets/benchmark_splits/val.json
     freq:       synthetic
     categories: [irrelevant]
 
-  - name:       sine_synergy
-    train_json: datasets/sine_synergy/train.json
-    val_json:   datasets/sine_synergy/val.json
-    freq:       synthetic
-    categories: [synergy]
 
 # ── Per-frequency window settings ─────────────────────────────────────────────
-# synthetic: matches sine_synergy.yaml (lookback_steps=2 padded to
+# synthetic: matches sine.yaml (lookback_steps=2 padded to
 # TRANSFORMER_MIN_LOOKBACK=8, horizon_steps=1, label_len = seq_len//2).
 freq_settings:
   synthetic:

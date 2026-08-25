@@ -47,305 +47,180 @@ git clone https://github.com/pliang279/PID PID
 
 ---
 
-## Quickstart: Reproduce Experimental Results
+## Reproducing the paper
 
-The commands below reproduce the two primary datasets from the paper (synthetic sine-wave and real-world TimeMMD) and generate the plots.
-
-**1. Run metrics and train regressors**
-
-```bash
-./run_finals.sh sine timemmd
-```
-
-This runs the full pipeline for both datasets and writes results to `results/final/`.
-
-**2. Plot results**
+Three scripts run every experiment; one script turns the saved results into the
+tables and figures. Nothing is hidden in a notebook.
 
 ```bash
-# Sine wave
-python plot.py \
-    --metrics results/final/sine_metrics.json \
-    --models  results/final/sine_model.json \
-    --output-dir results/plots/sine/ \
-    --perf-metric r2
+./reproduce/01_mmtt_bench.sh                        # synthetic — no downloads needed
+MM_TSF_ROOT=../MM-TSFlib/data ./reproduce/02_timemmd.sh
+FINTEXTS_ROOT=../FinTexTS      ./reproduce/03_fintexts.sh
 
-# TimeMMD
-python plot.py \
-    --metrics results/final/timemmd_metrics.json \
-    --models  results/final/timemmd_model.json \
-    --output-dir results/plots/timemmd/ \
-    --perf-metric r2
+python reproduce/make_artifacts.py                  # tables from saved results
+python plot.py --figure1 -o results/figures         # figures
 ```
 
-**Plots that appear in the paper** are the correlation trend plots (`*_correlation_trends_r2.png`), which show how each information metric correlates with model R² across annotation categories.
+`reproduce/make_artifacts.py --list` prints which artifact comes from which
+script and which result file.
+
+### 1. MMTT-Bench (synthetic)
+
+```bash
+./reproduce/01_mmtt_bench.sh
+```
+
+Self-contained: `datasets/benchmark_splits/` is in the repository, and the
+script derives everything else from it — the nine mixture corpora, all three
+coupling axes (corpus-level ρ, per-annotation content noise, temporal jitter),
+and the four noisy-signal variants. It then computes MI, runs the four
+representation sweeps, the shuffle control, and trains the downstream models.
+
+Produces Tables 4–12 and Figures 2, 3, 4 and 6.
+
+| variable | effect |
+|---|---|
+| `QUICK=1` | skip MINE, InfoNCE and the transformers — minutes instead of hours |
+| `SKIP_DATA=1` | reuse the corpora already in `datasets/` |
+| `PY=...` | interpreter to use (default `python`) |
+
+MINE dominates the runtime: roughly 53 s per MI estimate on CPU at N = 1279,
+20 estimates per result. Use `QUICK=1` for a smoke test.
+
+### 2. Time-MMD
+
+```bash
+git clone https://github.com/AdityaLab/MM-TSFlib ../MM-TSFlib
+MM_TSF_ROOT=../MM-TSFlib/data ./reproduce/02_timemmd.sh
+```
+
+The Time-MMD CSVs are not redistributed here. Six domains are used; Economy and
+Security are excluded, having fewer than 300 training samples per category and
+no usable validation split.
+
+Time-MMD mixes sampling frequencies and the CFA window settings differ by
+frequency, so MI runs twice: `final_configs/timemmd.yaml` covers the monthly
+domains (seq_len 8, pred_len 6) and `timemmd_weekly.yaml` the weekly ones
+(seq_len 36, pred_len 12).
+
+### 3. FinTexTS
+
+```bash
+FINTEXTS_ROOT=/path/to/FinTexTS ./reproduce/03_fintexts.sh
+```
+
+Ten tickers, matching the paper: AMD, BA, COST, DIS, GOOGL, INTC, NFLX, NVDA,
+T, TSLA. Override with `TICKERS="AMD BA"`. Each ticker is treated as an
+independent dataset and the estimates are pooled at the end, because the
+tickers share a calendar but not a data-generating process.
+
+FinTexTS carries 21 per-field texts per annotation point. `train_transformer.py`
+embeds each separately and mean-pools, matching FinTexTS Sec 4.1 rather than
+concatenating and embedding once, and uses ModernBERT for its 8192-token
+context — BERT would truncate the filing fields at 512.
+
+Together, 2 and 3 produce Tables 13, 17 and 18, and Figure 5.
 
 ---
 
+## Tables and figures
 
-## Experiment workflow
+### Tables
 
-The full experimental pipeline proceeds in six steps. Steps 1–3 establish the base result on the synthetic dataset; steps 4–5 test robustness; step 6 applies the benchmark to real-world data.
+```bash
+python reproduce/make_artifacts.py                    # everything available
+python reproduce/make_artifacts.py --which mmtt_bench # one dataset family
+python reproduce/make_artifacts.py --list             # the artifact manifest
+```
+
+Reads only saved results, so it runs in seconds and can be re-run freely.
+LaTeX goes to `paper_artifacts/tables/`. Missing inputs are reported and skipped
+rather than raising, so a partial run still produces its share.
+
+### Figures
+
+Every figure has one command. All of them write into `--output-dir`.
+
+```bash
+python plot.py --figure1 -o results/figures    # signal with example annotations
+python plot.py --figure2 -o results/figures    # ordering grid + encoder sensitivity
+python plot.py --figure5 -o results/figures    # real-world MI grid
+
+python plot.py --metrics results/mmtt_bench/metrics.json \
+               --models  results/mmtt_bench/sklearn.json \
+               -o results/figures --perf-metric mse    # Figures 3 and 4
+```
+
+`--figure2` takes the sweep JSONs explicitly, or finds them in
+`results/mmtt_bench/` when given none. `--figure5` accepts `--fig5-quantity
+conditional` to plot `I(X_text; Y | X_ts)` against a rule at zero instead of the
+joint estimate against the series-only value.
+
+Drawing lives in `src/mmtt_bench/viz.py`, loading in `plot.py`. Retired
+plotting code is kept in `to-delete/` with a note on what replaced it.
+
+### Which command produces what
+
+| Paper artifact | Command |
+|---|---|
+| Table 4 encoder sweep | `01_mmtt_bench.sh` → `make_artifacts.py` |
+| Table 5 PCA sweep | `01_mmtt_bench.sh` → `make_artifacts.py` |
+| Table 6 lookback sweep | `01_mmtt_bench.sh` → `make_artifacts.py` |
+| Table 7 PatchTST sweep | `01_mmtt_bench.sh` → `make_artifacts.py` |
+| Table 8 conditional MI | `01_mmtt_bench.sh` → `make_artifacts.py` |
+| Table 9 downstream MSE | `01_mmtt_bench.sh` → `make_artifacts.py` |
+| Table 10 shuffle control | `01_mmtt_bench.sh` → `make_artifacts.py` |
+| Table 11 observation noise | `01_mmtt_bench.sh` → `make_artifacts.py` |
+| Table 12 temporal jitter | `01_mmtt_bench.sh` → `make_artifacts.py` |
+| Table 13 dataset features | `02` + `03` → `make_artifacts.py` |
+| Tables 17–18 real-world | `02` + `03` → `make_artifacts.py` |
+| Figure 1 annotations | `plot.py --figure1` |
+| Figure 2 sweeps | `01_mmtt_bench.sh` → `plot.py --figure2` |
+| Figure 3 MI vs MSE | `01_mmtt_bench.sh` → `plot.py --metrics ... --models ...` |
+| Figure 4 mixture | `01_mmtt_bench.sh` → `plot.py --metrics ... --models ...` |
+| Figure 5 real-world MI | `02` + `03` → `plot.py --figure5` |
+| Figure 6 embeddings | `viz.plot_2d_embeddings` |
+
+Tables 1, 3, 14, 15 and 16 are static — estimator properties and hyperparameter
+listings — and are not generated.
 
 ---
 
-### Step 1 — Generate the synthetic dataset
+## Running a single experiment
 
-All data generation scripts must be run from the `data_generation/` directory because they import local template modules.
+The reproduce scripts are thin wrappers over two entry points, both of which
+take a config from `final_configs/`.
 
 ```bash
-cd src/mmtt-bench/data_generation
-python sine_generator.py --output-dir ../../../benchmark_splits
+# mutual information
+python run.py final_configs/sine.yaml -o results/mmtt_bench/metrics.json
+
+# downstream models
+python train.py --config final_configs/sine.yaml -o results/mmtt_bench/sklearn.json
+python train_transformer.py --config final_configs/sine_transformers.yaml \
+                            -o results/mmtt_bench/transformers
 ```
 
-This produces three JSON splits (`train.json`, `val.json`, `test.json`) inside `benchmark_splits/`. Each split records the dense signal arrays and the annotation points with their ground-truth category labels and text samples.
+A config with a `datasets:` list runs once per dataset and writes one JSON per
+dataset into the output directory. A config with a `sweep:` block varies one
+parameter — or several coupled parameters, as `sweeps/patch.yaml` does for
+patch length, stride and lookback — and writes all points to one file.
 
-Key parameters (edit directly in `sine_generator.py`):
+### Regenerating the synthetic corpora
 
-| Parameter | Default | Description |
-|---|---|---|
-| `signal_type` | `sine_with_constants` | `sine` or `sine_with_constants` |
-| `constant` | `-0.5` | Value substituted during constant segments |
-| `transition_mask` | `0.3` | Fraction of t-values replaced by the constant |
-| `n_signals` | `512` | Number of sinusoidal cycles to generate |
-| `annotation_step` | `period / 4` | Time between annotation points |
-| `annotations_per_point` | `1` | Text samples generated per annotation point |
+```bash
+python src/mmtt_bench/data_generation/sine_generator.py \
+    --signal-type noisy_sine_with_constants --noise-std 0.1 --output-dir datasets/my_split
+python src/mmtt_bench/data_generation/mixture.py  --source datasets/benchmark_splits
+python src/mmtt_bench/data_generation/coupling.py --source datasets/benchmark_splits --mode jitter
+```
 
-Train / val / test splits follow a cycle-based scheme: the first 62.5% of cycles for training, the next 18.75% for validation, and the remaining 18.75% for test.
+`coupling.py` takes `--mode rho|noise|jitter`. All three write a new split
+directory alongside the source, adding one category per level, which `run.py`
+and `train.py` pick up automatically.
 
 ---
 
-### Step 2 — Compute metrics and train regression models
-
-Use `final_configs/sine.yaml` for the best-validated parameters. To inspect or adjust them, see the configuration reference at the end of this document.
-
-**Information-theoretic metrics:**
-
-```bash
-python run.py final_configs/sine.yaml --output results/final/sine_metrics.json
-```
-
-**Regression models:**
-
-```bash
-python train.py \
-    --config  final_configs/sine.yaml \
-    --output  results/final/sine_model.json
-```
-
-`run.py` writes a JSON with type `"single"` containing all bootstrap samples so plots can be regenerated without re-running. `train.py` writes both a structured JSON (for `plot.py`) and a `results.csv` summary table.
-
-Both scripts accept the same YAML config. All fields can be overridden on the command line; see `python run.py --help` and `python train.py --help`.
-
----
-
-### Step 3 — Visualise and compare results
-
-```bash
-python plot.py \
-    --metrics results/final/sinezero_metrics.json \
-    --models  results/final/sinezero_model.json \
-    --output-dir results/final/plots/
-```
-
-This produces all plots in one pass and prints Spearman and Kendall rank correlations to stdout. Saved outputs:
-
-- **Scatter plots** — info metric value (x) vs performance delta (y), one point per category, one panel per metric
-- **Correlation trend plots** — linear trend lines per model with shared y-axis across panels
-- **Delta bar charts** — grouped bars showing the per-category improvement per model
-
-Use `--perf-metric` to select which performance metric to plot (default: `delta_r2`):
-
-```bash
-python plot.py \
-    --metrics results/final/sinezero_metrics.json \
-    --models  results/final/sinezero_model.json \
-    --perf-metric r2 \
-    --output-dir results/final/plots/
-```
-
-Use `--model-filter` to restrict to specific regressors:
-
-```bash
-python plot.py \
-    --metrics results/final/sinezero_metrics.json \
-    --models  results/final/sinezero_model.json \
-    --model-filter ridge mlp
-```
-
----
-
-### Step 4 — Mixture categories
-
-Mixture categories linearly interpolate between `correct` and a contaminating category (`incorrect` or `irrelevant`), letting the benchmark test whether information metrics track annotation quality monotonically.
-
-**Generate mixture splits:**
-
-```bash
-cd src/mmtt-bench/data_generation
-python mixture.py \
-    --source     ../../../benchmark_splits \
-    --output-dir ../../../benchmark_splits_mixtures
-```
-
-This adds six new categories to the split — `mixture_25_incorrect`, `mixture_50_incorrect`, `mixture_75_incorrect`, and the corresponding `irrelevant` variants — where the number indicates the contamination percentage. The original three categories are preserved unchanged.
-
-Default contamination levels (25%, 50%, 75%) and types (`incorrect`, `irrelevant`) can be customised:
-
-```bash
-python mixture.py \
-    --source     ../../../benchmark_splits \
-    --output-dir ../../../benchmark_splits_mixtures \
-    --levels 10 25 50 75 90 \
-    --types  incorrect irrelevant \
-    --seed   42
-```
-
-**Run metrics and models on the mixture dataset:**
-
-```bash
-python run.py final_configs/mixture.yaml --output results/final/mixture_metrics.json
-
-python train.py \
-    --config  final_configs/mixture.yaml \
-    --output  results/final/mixture_model.json
-```
-
-**Plot:**
-
-```bash
-python plot.py results/final/mixture_metrics.json --output-dir results/final/plots/
-
-python plot.py \
-    --metrics results/final/mixture_metrics.json \
-    --models  results/final/mixture_model.json \
-    --output-dir results/final/plots/
-```
-
----
-
-### Step 5 — Shuffle baseline
-
-Shuffling reassigns text embeddings to random time points within each category, breaking any text–signal alignment. All metrics should fall to approximately zero on shuffled data; non-zero values indicate a numerical artefact.
-
-Add to any YAML config:
-
-```yaml
-shuffle:      true
-shuffle_seed: 42
-```
-
-Or pass `--shuffle` on the command line:
-
-```bash
-python run.py final_configs/sine.yaml \
-    --output results/final/sineshuffle_metrics.json \
-    --shuffle
-
-python train.py \
-    --config  final_configs/sine.yaml \
-    --output  results/final/sineshuffle_model.json \
-    --shuffle
-```
-
-Shuffling is applied after tokenization and applies equally to all categories including mixture categories. Compare the shuffled result against the unshuffled result from Step 2 to confirm that positive MI estimates reflect genuine text–signal alignment.
-
----
-
-### Step 6 — TimeMMD real-world dataset
-
-TimeMMD provides real-world time series paired with news and search text across several domains. This step converts the raw CSVs into the benchmark split format and runs the same pipeline as Steps 2–3.
-
-**Obtain the raw data** from the [TimeMMD repository](https://github.com/AdityaLab/MM-TSFlib) and place the CSVs in a local directory (e.g. `timemmd_dataset/`).
-
-**Generate MMTT-Bench splits:**
-
-```bash
-python src/mmtt-bench/data_generation/timemmd.py \
-    --input-dir  timemmd_dataset/ \
-    --output-dir timemmd_splits/
-```
-
-Each CSV (e.g. `energy.csv`) produces two JSON files: `train.json` and `val.json`. The `--seed` flag controls the RNG used to sample irrelevant text from other domains (default: 42).
-
-**Run metrics and models:**
-
-```bash
-python run.py final_configs/timemmd.yaml \
-    --output results/final/timemmd_metrics.json
-
-python train.py \
-    --config  final_configs/timemmd.yaml \
-    --output  results/final/timemmd_model.json
-```
-
-**Plot:**
-
-```bash
-python plot.py results/final/timemmd_metrics.json \
-    --output-dir results/final/plots/
-
-python plot.py \
-    --metrics results/final/timemmd_metrics.json \
-    --models  results/final/timemmd_model.json \
-    --output-dir results/final/plots/
-```
-
----
-
-## Parameter sweeps
-
-Use a `sweep:` block in any config to vary one parameter across all metrics in a single run:
-
-```yaml
-data_path:      datasets/benchmark_splits/train.json
-model_name:     sentence-transformers/all-distilroberta-v1
-ts_tokenizer:   identity
-lookback_steps: 2
-patch_len:      1
-stride:         1
-
-compute_kwargs:
-  pca_dim:      16
-  n_bootstrap:  20
-  strategy: discrete
-
-metrics:
-  mutual_information:
-    n_neighbours: 1
-    n_subsample_reps:  20
-  mine:
-    mine_iters: 500
-    n_bootstrap: 20
-    lr: 0.0001
-  infonce:
-    n_bootstrap: 20    # point estimate — training is slow
-    hidden_dim:  128
-    n_iters:     500
-    batch_size:  64      # ceiling on MI = log(64) ≈ 4.2 nats
-    lr:          0.001
-  cca:
-    n_bootstrap: 20    # same as KSG for fair variance comparison
-    eps: 1e-5   
-  v_information:
-    cv: 5
-    n_bootstrap:  20
-  pid:
-    n_clusters_ts:   4
-    n_clusters_text: 5
-    n_bins_y:        4
-    n_bootstrap:  20
-
-sweep:
-  param:  pca_dim
-  values: [2, 4, 8, 16, 32]
-```
-
-```bash
-python run.py sweep_config.yaml --output results/pca_sweep.json
-python plot.py results/pca_sweep.json --output-dir results/plots/
-```
-
-The `param` field can be any top-level config key, any key inside `compute_kwargs`, or any key inside a specific metric's kwargs block. Category data is only rebuilt when the swept parameter affects data loading.
 
 ---
 
