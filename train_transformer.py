@@ -1,25 +1,44 @@
 #!/usr/bin/env python3
 """
-train_transformer_cfa.py — Reproduce CFA paper experiments on TimeMMD data.
+train_transformer.py — CFA-style multimodal forecasting for every dataset family
+in this repo: MMTT-Bench (synthetic), Time-MMD, and FinTexTS.
 
 Closely mirrors Lee et al. (2026) "Rethinking Multimodal Fusion for Time Series
 Forecasting: Text Modalities Need Constrained Fusion" (arXiv:2603.22372) using:
 
   - CFA backbone models  (cfa/models/)  which accept text_context
-  - MM-TSFlib Dataset_Custom data loader (sliding windows, StandardScaler)
-  - BERT/GPT2 text encoding: embedding lookup → MLP(d_llm→d_llm/8→pred_len) → avg-pool
-  - All CFA injection modes: unimodal, first/middle/last-additive, first/middle/last-concat,
-    film, cfa, gating, orthogonal
+  - CFA's Dataset_Custom loader (sliding windows, StandardScaler) for real data;
+    MmttDataset (one sample per annotation point, no window) for the synthetic
+    benchmark, which preserves the sample independence the MI estimates need
+  - BERT / GPT2 / ModernBERT text encoding: embedding lookup →
+    MLP(d_llm→d_llm/8→pred_len) → pooling
+  - All CFA injection modes: unimodal, first/middle/last-additive,
+    first/middle/last-concat, film, cfa, gating, orthogonal
 
 Key invariant from CFA run.py (line 174): text_emb = pred_len.
 
+Single- and multi-sample text
+-----------------------------
+Time-MMD and MMTT-Bench carry one text per annotation point; FinTexTS carries 21
+per-field texts. Both are handled by one path. MmttDataset sets `multi_sample`
+when any point has more than one sample, and `_encode_batch_text()` dispatches
+on it: multi-sample points are embedded field-by-field and mean-pooled
+(`encode_text_pooled()`, matching FinTexTS arXiv:2603.02702 Sec 4.1 — not
+concatenate-then-embed-once), while single-sample points take the plain
+`encode_text()` path unchanged.
+
+ModernBERT (answerdotai/ModernBERT-large) is available via `llm_model` for
+FinTexTS's long filing fields; its 8192-token context avoids the truncation BERT
+would impose at 512. Truncation length is read from the tokenizer rather than
+hardcoded, so each encoder uses its own true limit.
+
 Usage
 -----
-    python train_transformer_cfa.py --config timemmd_cfa.yaml \\
-        --dataset Agriculture \\
-        --model PatchTST \\
-        --injection-mode cfa \\
-        --pred-len 6
+    python train_transformer.py --config final_configs/timemmd_transformer.yaml \\
+        --dataset Agriculture --model PatchTST --injection-mode cfa --pred-len 6
+
+    python train_transformer.py --config final_configs/fintexts_transformer.yaml \\
+        --output results/fintexts/transformer/
 """
 from __future__ import annotations
 
@@ -86,7 +105,7 @@ def load_text_encoder(llm_model: str, llm_layers: int, device: torch.device):
     from transformers import (
         BertConfig, BertModel, BertTokenizer,
         GPT2Config, GPT2Model, GPT2Tokenizer,
-        AutoTokenizer, LlamaConfig, LlamaModel,
+        AutoTokenizer, AutoConfig, AutoModel, LlamaConfig, LlamaModel,
     )
 
     if llm_model == 'BERT':
@@ -122,6 +141,18 @@ def load_text_encoder(llm_model: str, llm_layers: int, device: torch.device):
         model = LlamaModel.from_pretrained(path, config=cfg)
         tok   = AutoTokenizer.from_pretrained(path)
         d_llm = 4096
+
+    elif llm_model == 'ModernBERT':
+        # Native 8192-token context (vs BERT's 512) — needed for FinTexTS's
+        # ~3000-token concatenated daily text, which BERT/GPT2 would mostly
+        # truncate away. encode_text() derives max_length from the tokenizer
+        # itself, so no separate wiring is needed here.
+        path = 'answerdotai/ModernBERT-large'
+        cfg = AutoConfig.from_pretrained(path)
+        cfg.num_hidden_layers = llm_layers
+        model = AutoModel.from_pretrained(path, config=cfg)
+        tok   = AutoTokenizer.from_pretrained(path)
+        d_llm = cfg.hidden_size
 
     else:
         raise ValueError(f'Unsupported llm_model: {llm_model}')
@@ -186,8 +217,13 @@ def encode_text(
         f"{t}"
         for t in texts
     ]
+    # Derive the truncation length from the tokenizer's own model_max_length
+    # rather than a fixed 1024 — that hardcode silently exceeded BERT's true
+    # 512-position limit, and would have capped ModernBERT's 8192-token
+    # context at the same 1024 as everything else.
+    max_length = min(tokenizer.model_max_length, 8192)
     token_ids = tokenizer(
-        prompt, return_tensors='pt', padding=True, truncation=True, max_length=1024
+        prompt, return_tensors='pt', padding=True, truncation=True, max_length=max_length
     ).input_ids.to(device)
 
     with torch.no_grad():
@@ -203,6 +239,49 @@ def encode_text(
         return emb.max(dim=1)[0]
     else:
         return emb.mean(dim=1)
+
+
+def encode_text_pooled(
+    sample_lists: list[list[str]],
+    tokenizer,
+    llm_model: nn.Module,
+    mlp: MLP,
+    pool_type: str,
+    use_fullmodel: bool,
+    device: torch.device,
+) -> torch.Tensor:
+    """
+    Multi-sample counterpart to encode_text() — used only for datasets whose
+    points carry more than one text sample (MmttDataset.multi_sample), e.g.
+    FinTexTS's 21 per-field texts per point. Matches the FinTexTS paper's
+    architecture (arXiv:2603.02702 Sec 4.1): embed each sample separately,
+    then mean-pool the resulting [B, text_emb] vectors across samples —
+    NOT concatenate the raw texts and embed once.
+
+    Reuses encode_text() unchanged for the actual tokenize/embed/MLP work
+    (flatten to one batch, then reshape+pool), so single-sample datasets
+    routed through the plain encode_text() path are entirely unaffected by
+    this function's existence.
+    """
+    k = len(sample_lists[0])
+    assert all(len(s) == k for s in sample_lists), \
+        "encode_text_pooled requires a uniform sample count across the batch"
+    flat = [text for samples in sample_lists for text in samples]   # [B*K]
+
+    flat_emb = encode_text(flat, tokenizer, llm_model, mlp, pool_type, use_fullmodel, device)
+    return flat_emb.view(len(sample_lists), k, -1).mean(dim=1)   # [B, text_emb]
+
+
+def _encode_batch_text(ds, index, tokenizer, llm_model, mlp, pool_type, use_fullmodel, device):
+    """Dispatch to encode_text_pooled() only for datasets whose points
+    actually carry multiple samples (ds.multi_sample); everything else
+    (TimeMMD, TTC — always 1 sample/point) takes the original _texts()/
+    encode_text() path, unchanged."""
+    if getattr(ds, 'multi_sample', False):
+        return encode_text_pooled(ds.get_text_samples(index), tokenizer, llm_model, mlp,
+                                  pool_type, use_fullmodel, device)
+    return encode_text(_texts(ds.get_text(index)), tokenizer, llm_model, mlp,
+                       pool_type, use_fullmodel, device)
 
 
 # MODEL CONFIG
@@ -357,7 +436,7 @@ class MmttDataset(torch.utils.data.Dataset):
         dense_t  = [round(t, 4) for t in raw['metadata']['t']]
         n_dense  = len(dense_y)
 
-        lookbacks, futures, texts, cats = [], [], [], []
+        lookbacks, futures, texts, text_samples, cats = [], [], [], [], []
 
         for pt in raw['points']:
             if categories and pt.get('category') not in categories:
@@ -381,14 +460,22 @@ class MmttDataset(torch.utils.data.Dataset):
                 continue
             fut = dense_y[idx + 1 : future_end]     # [pred_len]
 
-            # Text: take the first sample surface form
-            text = ''
-            if pt.get('samples'):
-                text = pt['samples'][0].get('text', '')
+            # self.texts: first sample surface form only — unchanged, still
+            # what encode_text()/_texts() (shared with the mmtsf/Dataset_Custom
+            # path) consume, so behaviour there is untouched.
+            #
+            # self.text_samples: every sample's text for this point (e.g.
+            # FinTexTS's 21 per-field texts). Used only via get_text_samples()
+            # + encode_text_pooled(), a separate opt-in path (see below) that
+            # activates only when a dataset actually has multi-sample points
+            # — TimeMMD/TTC always have exactly 1, so they never take it.
+            samples = pt.get('samples') or [{}]
+            text = samples[0].get('text', '')
 
             lookbacks.append(lb)
             futures.append(fut)
             texts.append(text)
+            text_samples.append([s.get('text', '') for s in samples])
             # Derived categories (e.g. coupling_70_incorrect from coupling.py)
             # record their base category in source_category — used by the
             # dummy-oracle path below.
@@ -434,6 +521,11 @@ class MmttDataset(torch.utils.data.Dataset):
                     )
                 oracle.append(v)
             texts = [repr(v) for v in oracle]
+            # Oracle values are single synthetic scalars, not real per-field
+            # text — multi-sample pooling has no meaning here, so keep
+            # text_samples consistent with texts rather than the stale
+            # real-text lists collected above.
+            text_samples = [[t] for t in texts]
 
         # data_x: [N, seq_len, 1]
         self.data_x = lb_arr[:, :, np.newaxis]
@@ -443,7 +535,12 @@ class MmttDataset(torch.utils.data.Dataset):
         future_part = fut_arr[:, :, np.newaxis]                   # [N, pred_len, 1]
         self.data_y = np.concatenate([label_part, future_part], axis=1)
 
-        self.texts    = texts
+        self.texts        = texts
+        self.text_samples = text_samples
+        # Only genuinely multi-sample datasets (e.g. FinTexTS's 21 fields/point)
+        # take the pooled encode path; TimeMMD/TTC (always 1 sample/point) fall
+        # through to the original, untouched encode_text()/_texts() path.
+        self.multi_sample = any(len(s) > 1 for s in text_samples)
         self.seq_len  = seq_len
         self.label_len = label_len
         self.pred_len = pred_len
@@ -459,6 +556,16 @@ class MmttDataset(torch.utils.data.Dataset):
         if isinstance(indices, torch.Tensor):
             indices = indices.numpy()
         return np.array([self.texts[int(i)] for i in indices], dtype=object)
+
+    def get_text_samples(self, indices):
+        """Return each point's full sample-text list for a batch of indices
+        — plain list[list[str]], deliberately not routed through
+        np.asarray()/get_text()'s duplicate-column shape-sniffing (which
+        would misread a uniform-length multi-sample list as that case).
+        Only meaningful when self.multi_sample; see encode_text_pooled()."""
+        if isinstance(indices, torch.Tensor):
+            indices = indices.numpy()
+        return [self.text_samples[int(i)] for i in indices]
 
     def get_prior_y(self, indices):
         """Return zeros — mmtt-bench has no prior_history_avg column."""
@@ -562,10 +669,8 @@ def train_one_setting(
             batch_x_mark = batch_x_mark.float().to(device)
             batch_y_mark = batch_y_mark.float().to(device)
 
-            batch_text   = _texts(train_ds.get_text(index))
-
-            text_ctx = encode_text(
-                batch_text, tokenizer, llm_model, mlp,
+            text_ctx = _encode_batch_text(
+                train_ds, index, tokenizer, llm_model, mlp,
                 pool_type, use_fullmodel, device,
             )   # [B, pred_len]
 
@@ -628,10 +733,8 @@ def _evaluate_loss(backbone, mlp, ds, loader, criterion, cfg,
         batch_x_mark = batch_x_mark.float().to(device)
         batch_y_mark = batch_y_mark.float().to(device)
 
-        batch_text = _texts(ds.get_text(index))
-
-        text_ctx = encode_text(batch_text, tokenizer, llm_model, mlp,
-                               pool_type, use_fullmodel, device)
+        text_ctx = _encode_batch_text(ds, index, tokenizer, llm_model, mlp,
+                                      pool_type, use_fullmodel, device)
 
         dec_inp = torch.zeros_like(batch_y[:, -cfg.pred_len:, :])
         dec_inp = torch.cat([batch_y[:, :cfg.label_len, :], dec_inp], dim=1).to(device)
@@ -662,9 +765,8 @@ def _compute_metrics(backbone, mlp, ds, loader, cfg,
         batch_x_mark = batch_x_mark.float().to(device)
         batch_y_mark = batch_y_mark.float().to(device)
 
-        batch_text = _texts(ds.get_text(index))
-        text_ctx = encode_text(batch_text, tokenizer, llm_model, mlp,
-                               pool_type, use_fullmodel, device)
+        text_ctx = _encode_batch_text(ds, index, tokenizer, llm_model, mlp,
+                                      pool_type, use_fullmodel, device)
 
         dec_inp = torch.zeros_like(batch_y[:, -cfg.pred_len:, :])
         dec_inp = torch.cat([batch_y[:, :cfg.label_len, :], dec_inp], dim=1).to(device)
