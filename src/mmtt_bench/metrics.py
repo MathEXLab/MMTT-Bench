@@ -133,6 +133,10 @@ def _pool_by_annotation_point(
     y_pooled  = y.reshape(n_points, n_samples, -1)[:, 0, :]
     return x_pooled, ts_pooled, y_pooled
 
+def _zscore(a: np.ndarray) -> np.ndarray:
+    """Zero-mean unit-variance per dimension (constant dims map to 0)."""
+    return (a - a.mean(axis=0)) / (a.std(axis=0) + 1e-8)
+
 def _prepare_pooled(
     category_data: dict,
     pca_text: PCA = None,
@@ -236,6 +240,13 @@ class MutualInformationMetric:
         for cat_idx, (cat, vals) in enumerate(category_data.items()):
             x_pooled, X_ts, Y = pooled[cat]
             X_text  = pca_text.transform(x_pooled)[:, :pca_dim]
+            # KSG uses Chebyshev (max-coordinate) distances, so dimensions on
+            # larger scales mask smaller ones entirely: raw ts/y values in the
+            # thousands make the ~0.1-scale text dims invisible and force
+            # joint == ts exactly. Standardise every dimension first.
+            X_text  = _zscore(X_text)
+            X_ts    = _zscore(X_ts)
+            Y       = _zscore(Y)
             X_joint = np.hstack([X_ts, X_text])
             N       = len(Y)
 
@@ -1071,6 +1082,11 @@ class InfoNCEMetric:
         import torch.optim as optim
 
         torch.manual_seed(torch_seed)
+
+        # Standardise so raw-scale inputs (e.g. Traffic, ~1e5) don't blow up
+        # critic training — same guard as MINEMetric._estimate_mi.
+        X = (X - X.mean(0)) / (X.std(0) + 1e-8)
+        Y = (Y - Y.mean(0)) / (Y.std(0) + 1e-8)
 
         X_t = torch.tensor(X, dtype=torch.float32)
         Y_t = torch.tensor(Y, dtype=torch.float32)

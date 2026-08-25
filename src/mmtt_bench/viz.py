@@ -88,7 +88,11 @@ METRIC_DISPLAY = {
 MODEL_DISPLAY = {
     'sentence-transformers/average_word_embeddings_glove.840B.300d': 'GloVe',
     'sentence-transformers/all-MiniLM-L6-v2' : 'all-MiniLM',
-    'sentence-transformers/all-distilroberta-v1': 'DistilRoBERTa'
+    'sentence-transformers/all-distilroberta-v1': 'DistilRoBERTa',
+    "iTransformer|first-additive": "iTransformer",
+    "FEDformer|first-additive": "FEDformer",
+    "Informer|first-additive": "Informer",
+    "Nonstationary_Transformer|first-additive": "Nonstationary_Transformer"
 }
 
 # ---------------------------------------------------------------------------
@@ -132,6 +136,10 @@ MODEL_MARKERS = {
     'gbr':   'D',
     'rf':    '*',
     'knn':   'P',
+    "iTransformer|first-additive": '>',
+    "FEDformer|first-additive": 'H',
+    "Informer|first-additive": '<',
+    "Nonstationary_Transformer|first-additive": 'd',
     # Transformer backbone models (TaTS + CFA)
     'Autoformer':              's',
     'Crossformer':             'p',
@@ -210,6 +218,10 @@ MODEL_LINESTYLES = {
     'gbr':   ':',
     'rf':    (0, (3, 1, 1, 1)),
     'knn':   (0, (5, 2)),
+    "iTransformer|first-additive": (0, (1, 2, 5, 2)),
+    "FEDformer|first-additive" :(0, (3, 5, 1, 5)),
+    "Informer|first-additive" : (0, (3, 1, 1, 1, 1, 1)),
+    "Nonstationary_Transformer|first-additive": (0, (4, 1, 1, 1, 1, 1)),
     # Transformer backbone models (TaTS + CFA)
     'Autoformer':              (0, (5, 5)),
     'Crossformer':             (0, (1, 1)),
@@ -646,6 +658,8 @@ def plot_correlation_trends(
 
     def _score_label(m):
         s = scores_dict.get(m)
+        if "|" in m:
+            m = MODEL_DISPLAY.get(m, m)
         return f"{m}  score={round(s, 4)}" if s is not None else m
     model_legend = [
         Line2D([0], [0], color='black',

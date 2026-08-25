@@ -209,12 +209,16 @@ def _attach_dummy_embeddings(data, category_data, rng,
         correct_value = float(np.asarray(pt['y_future']).ravel()[0])
         n_samples = len(pt['x_text'])
 
+        # Derived categories (e.g. coupling_70_incorrect from coupling.py)
+        # record which base category the point was copied from.
+        src_cat = pt.get('source_category', cat)
+
         for _ in range(n_samples):
-            if cat == 'irrelevant':
+            if src_cat == 'irrelevant':
                 value = 0.0
-            elif cat == 'correct':
+            elif src_cat == 'correct':
                 value = correct_value
-            elif cat == 'incorrect':
+            elif src_cat == 'incorrect':
                 choices = [v for v in valid_values
                            if not np.isclose(v, correct_value)]
                 value = rng.choice(choices)

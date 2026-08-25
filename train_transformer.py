@@ -389,7 +389,10 @@ class MmttDataset(torch.utils.data.Dataset):
             lookbacks.append(lb)
             futures.append(fut)
             texts.append(text)
-            cats.append(pt.get('category'))
+            # Derived categories (e.g. coupling_70_incorrect from coupling.py)
+            # record their base category in source_category — used by the
+            # dummy-oracle path below.
+            cats.append(pt.get('source_category', pt.get('category')))
 
         if not lookbacks:
             raise ValueError(f'No samples found in {json_path} '

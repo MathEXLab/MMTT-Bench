@@ -104,11 +104,39 @@ def _sine_with_constants(
     return y
 
 
+def _noisy_sine_with_constants(
+    t:             np.ndarray,
+    transition_mask: float = 0.3,
+    min_constant_len:  float = np.pi/2,
+    max_constant_len:  float = 2*np.pi,
+    seed:          Optional[int] = None,
+    constant: Optional[float] = -0.5,
+    noise_std: float = 0.1,
+    **_,
+) -> np.ndarray:
+    """
+    Sine wave with flatline segments plus Gaussian observation noise.
+
+    The constant-segment mask uses the same rng sequence as
+    _sine_with_constants (seeded with `seed`), so _make_mask(seed) still
+    recovers the exact mask; noise draws from an independent stream (seed+1).
+    """
+    y = _sine_with_constants(t, transition_mask, min_constant_len,
+                             max_constant_len, seed, constant)
+    rng = np.random.default_rng(None if seed is None else seed + 1)
+    return y + rng.normal(0, noise_std, len(t))
+
+
 SIGNAL_FUNCTIONS: dict[str, callable] = {
     "sine":            _sine,
     "noisy_sine":      _noisy_sine,
     "sine_with_constants": _sine_with_constants,
+    "noisy_sine_with_constants": _noisy_sine_with_constants,
 }
+
+# Signal types built on _sine_with_constants' flatline mask — these get
+# transition-phase annotations.
+CONSTANT_SIGNAL_TYPES = {"sine_with_constants", "noisy_sine_with_constants"}
 
 # Theoretical derivative of the underlying clean signal — used for annotation
 # direction/magnitude so that noisy variants still describe the true pattern.
@@ -116,6 +144,7 @@ SIGNAL_DERIVATIVES: dict[str, callable] = {
     "sine":            lambda t, **_: np.cos(t),
     "noisy_sine":      lambda t, **_: np.cos(t),   # derivative of sin, not the noise
     "sine_with_constants": lambda t, **_: np.cos(t),   # underlying sine's derivative
+    "noisy_sine_with_constants": lambda t, **_: np.cos(t),
 }
 
 
@@ -383,6 +412,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate annotated benchmark dataset.")
     parser.add_argument("--output-dir", default="benchmark_splits",
                         help="Path to output JSON file (default: benchmark_annotations.json)")
+    parser.add_argument("--signal-type", default="sine_with_constants",
+                        choices=list(SIGNAL_FUNCTIONS),
+                        help="Signal from SIGNAL_FUNCTIONS (default: sine_with_constants)")
+    parser.add_argument("--noise-std", type=float, default=0.1,
+                        help="Observation noise std for noisy_* signals (default: 0.1)")
+    parser.add_argument("--seed", type=int, default=42)
     # parser = argparse.ArgumentParser(description="Generate annotated benchmark dataset.")
     # parser.add_argument("--config", default="config.yaml",
     #                     help="Path to YAML config file (default: config.yaml)")
@@ -399,8 +434,8 @@ if __name__ == "__main__":
     # signal_kwargs = {k: v for k, v in scfg.items()
     #              if k not in ("type", "t_start", "t_end", "n_points")}
 
-    seed = 42
-    signal_type    = "sine_with_constants"
+    seed = args.seed
+    signal_type    = args.signal_type
     constant       = -0.5
     transition_mask  = 0.3    # fraction of t-values set to zero
     signal_fn      = SIGNAL_FUNCTIONS[signal_type]
@@ -419,15 +454,28 @@ if __name__ == "__main__":
     annotations_per_point = 1
 
     t  = np.arange(t_start, t_end, annotation_step)
-    y  = signal_fn(t, transition_mask=transition_mask, min_constant_len=min_constant_len, max_constant_len=max_constant_len, seed=seed, constant=constant)
+    y  = signal_fn(t, transition_mask=transition_mask, min_constant_len=min_constant_len, max_constant_len=max_constant_len, seed=seed, constant=constant, noise_std=args.noise_std)
     dy = SIGNAL_DERIVATIVES[signal_type](t)
+
+    # Clean counterpart for annotation text — annotations describe the true
+    # underlying pattern, not the observation noise. Identical to y for
+    # noise-free signals.
+    if signal_type == "noisy_sine_with_constants":
+        y_annot = _sine_with_constants(t, transition_mask=transition_mask,
+                                       min_constant_len=min_constant_len,
+                                       max_constant_len=max_constant_len,
+                                       seed=seed, constant=constant)
+    elif signal_type == "noisy_sine":
+        y_annot = _sine(t)
+    else:
+        y_annot = y
 
     indices = np.arange(0, len(t), dtype=int)
 
     # Pre-compute transition positions so the main loop can override phase
     drop_positions     = set()
     recovery_positions = set()
-    if signal_type == 'sine_with_constants':
+    if signal_type in CONSTANT_SIGNAL_TYPES:
         constant_mask = _make_mask(t, transition_mask=transition_mask,
                                     max_constant_len=max_constant_len, seed=seed)
         before_drop, before_recovery = _find_transition_annotations(constant_mask, indices)
@@ -448,7 +496,7 @@ if __name__ == "__main__":
 
         data_point = build_data_point(
             t        = t[i],
-            y        = y[i],
+            y        = y_annot[i],
             dy       = dy[i],
             phase    = phase,
             n_samples= annotations_per_point,

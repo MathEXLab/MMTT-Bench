@@ -91,7 +91,8 @@ def _serialise_results(results: dict) -> dict:
 
 _DATA_FIELDS = {
     "data_path", "embedding_type", "model_name", "device", "llm_batch_size",
-    "ts_tokenizer", "horizon_steps", "lookback_steps", "patch_len", "stride",
+    "hf_batch_size", "ts_tokenizer", "horizon_steps", "lookback_steps",
+    "patch_len", "stride",
 }
 
 _DEFAULTS = {
@@ -104,6 +105,7 @@ _DEFAULTS = {
     "stride":         1,
     "device":         None,
     "llm_batch_size": 8,
+    "hf_batch_size":  8,
 }
 
 
@@ -151,6 +153,12 @@ def _build_category_data(cfg: dict):
                 model_name,
                 device     = cfg.get("device",         _DEFAULTS["device"]),
                 batch_size = cfg.get("llm_batch_size", _DEFAULTS["llm_batch_size"]),
+            )
+        elif embedding_type == "huggingface":
+            text_tok = TEXT_TOKENIZERS[embedding_type](
+                model_name,
+                device     = cfg.get("device",        _DEFAULTS["device"]),
+                batch_size = cfg.get("hf_batch_size",  _DEFAULTS["hf_batch_size"]),
             )
         else:
             text_tok = TEXT_TOKENIZERS[embedding_type](model_name)

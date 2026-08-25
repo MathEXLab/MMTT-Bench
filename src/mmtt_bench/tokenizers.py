@@ -34,30 +34,52 @@ class HuggingFaceTokenizer:
     """
     CLS-token embeddings via HuggingFace AutoModel.
 
-    Tokenizes with padding=True and truncation=True, then returns the
-    CLS token representation: last_hidden_state[:, 0, :].
+    Tokenizes with padding=True and truncation=True (to the tokenizer's own
+    model_max_length — 8192 for e.g. answerdotai/ModernBERT-large, so long
+    documents aren't silently cut to a short default), then returns the CLS
+    token representation: last_hidden_state[:, 0, :].
+
+    Encodes in mini-batches (batch_size) and uses CUDA when available (mirrors
+    LLMTokenizer) — encoding hundreds-to-thousands of long documents in one
+    uncapped forward pass, as this class did previously, would OOM.
     """
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, device: str | None = None, batch_size: int = 8):
         self.model_name = model_name
+        self.device     = device   # auto-detected on first _load() if None
+        self.batch_size = batch_size
         self._tokenizer = None
         self._model     = None
 
     def _load(self):
-        if self._model is None:
-            import torch
-            from transformers import AutoTokenizer, AutoModel
-            self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self._model     = AutoModel.from_pretrained(self.model_name)
-
-    def encode(self, texts: list[str]) -> np.ndarray:
+        if self._model is not None:
+            return
         import torch
-        self._load()
+        from transformers import AutoTokenizer, AutoModel
+        self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        self._model     = AutoModel.from_pretrained(self.model_name)
+
+        if self.device is None:
+            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self._model = self._model.to(self.device)
+        self._model.eval()
+
+    def _encode_batch(self, texts: list[str]) -> np.ndarray:
+        import torch
         encoded = self._tokenizer(
             texts, padding=True, truncation=True, return_tensors='pt'
         )
+        encoded = {k: v.to(self.device) for k, v in encoded.items()}
         with torch.no_grad():
             out = self._model(**encoded)
-        return out.last_hidden_state[:, 0, :].numpy()
+        return out.last_hidden_state[:, 0, :].cpu().numpy()
+
+    def encode(self, texts: list[str]) -> np.ndarray:
+        self._load()
+        batches = [
+            texts[i: i + self.batch_size]
+            for i in range(0, len(texts), self.batch_size)
+        ]
+        return np.concatenate([self._encode_batch(b) for b in batches], axis=0)
 
 
 class LLMTokenizer:
