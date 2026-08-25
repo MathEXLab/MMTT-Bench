@@ -49,8 +49,7 @@ git clone https://github.com/pliang279/PID PID
 
 ## Reproducing the paper
 
-Three scripts run every experiment; one script turns the saved results into the
-tables and figures. Nothing is hidden in a notebook.
+Three scripts run every experiment, then a fourth turns the saved results into the tables and figures.
 
 ```bash
 ./reproduce/01_mmtt_bench.sh                        # synthetic — no downloads needed
@@ -61,8 +60,7 @@ python reproduce/make_artifacts.py                  # tables from saved results
 python plot.py --figure1 -o results/figures         # figures
 ```
 
-`reproduce/make_artifacts.py --list` prints which artifact comes from which
-script and which result file.
+`reproduce/make_artifacts.py --list` prints which artifact comes from which script and which result file.
 
 ### 1. MMTT-Bench (synthetic)
 

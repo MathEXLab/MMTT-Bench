@@ -20,11 +20,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import importlib.util
+import sys
 from pathlib import Path
 
 import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+
 RESULTS = ROOT / "results"
 OUT_TABLES = ROOT / "paper_artifacts" / "tables"
 OUT_FIGURES = ROOT / "paper_artifacts" / "figures"
@@ -35,6 +40,14 @@ ESTIMATORS = [
     ("cca", "CCA"), ("deep_cca", "Deep CCA"), ("v_information", "V-information"),
     ("pid", r"PID (U$_{\text{text}}$)"),
 ]
+
+def _plot_module():
+    """plot.py sits at the repo root and is not a package, so load it by path."""
+    spec = importlib.util.spec_from_file_location("mmtt_plot", ROOT / "plot.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
 
 # artifact -> (produced by, reads)
 MANIFEST = [
@@ -50,6 +63,7 @@ MANIFEST = [
     ("Table 13 dataset features",     "-",  "datasets/ (computed directly)"),
     ("Table 17 alignment/conditional", "02/03", "timemmd/mi/ + fintexts/mi/"),
     ("Table 18 real-world MSE",       "02/03", "timemmd/transformer/ + fintexts/transformer/"),
+    ("Figure 1 annotations",          "-",  "datasets/benchmark_splits/"),
     ("Figure 2 parameter sweeps",     "01", "mmtt_bench/sweep_*.json"),
     ("Figure 3 MI vs MSE",            "01", "mmtt_bench/metrics.json + models"),
     ("Figure 4 mixture corpora",      "01", "mmtt_bench/mixture*.json"),
@@ -250,11 +264,105 @@ def table_13() -> None:
         "stationarity.", "tab:dataset-features", align="ll" + "r" * 8))
 
 
+
+# ── figures ─────────────────────────────────────────────────────────────────
+def _fig(name: str) -> str:
+    OUT_FIGURES.mkdir(parents=True, exist_ok=True)
+    return str(OUT_FIGURES / name)
+
+
+def figures_mmtt_bench() -> None:
+    """Figures 1, 2, 3, 4 and 6 — all from saved results, nothing re-run."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from src.mmtt_bench import viz
+
+    # Figure 1 — the signal with example annotations (reads the split, not results)
+    split = ROOT / "datasets/benchmark_splits/train.json"
+    if split.exists():
+        viz.plot_annotation_example(json.load(open(split)),
+                                    save_path=_fig("figure1_annotations.png"))
+    else:
+        skip("Figure 1", "datasets/benchmark_splits/train.json missing")
+
+    # Figure 2 — ordering grid (several sweeps at once) + encoder sensitivity
+    sweeps = {name: load(f"mmtt_bench/sweep_{name}.json")
+              for name in ("pca", "lookback", "embedding")}
+    CHOSEN = {"pca": 16, "lookback": 2}
+    NAMES = {"pca": "PCA dim", "lookback": "Lookback"}
+    panels = []
+    for name in ("pca", "lookback"):
+        d = sweeps[name]
+        if not d:
+            continue
+        vals = d["sweep_values"]
+        panels.append({
+            "name": NAMES[name], "runs": d["runs"],
+            "labels": [str(v) for v in vals],
+            "chosen": next((i for i, v in enumerate(vals) if v == CHOSEN[name]), None),
+        })
+    if panels:
+        viz.plot_ordering_grid(panels, save_path=_fig("figure2_ordering_grid.png"))
+    else:
+        skip("Figure 2 (grid)", "no pca/lookback sweep results (run 01)")
+
+    if sweeps["embedding"]:
+        d = sweeps["embedding"]
+        viz.plot_embedding_sensitivity(
+            d["runs"], [str(v).split("/")[-1] for v in d["sweep_values"]],
+            save_path=_fig("figure2_encoder_sensitivity.png"))
+    else:
+        skip("Figure 2 (encoders)", "no embedding sweep results (run 01)")
+
+    # Figures 3 and 4 — MI against downstream performance
+    P = _plot_module()
+    mi_path = RESULTS / "mmtt_bench/metrics.json"
+    for models_name, fig_no, fn in (("sklearn.json", "3", "correlation_trends"),
+                                    ("mixture_sklearn.json", "4", "mixture")):
+        mdl_path = RESULTS / f"mmtt_bench/{models_name}"
+        src_mi = mi_path if fig_no == "3" else RESULTS / "mmtt_bench/mixture.json"
+        if not (src_mi.exists() and mdl_path.exists()):
+            skip(f"Figure {fig_no}", f"needs {src_mi.name} and {mdl_path.name} (run 01)")
+            continue
+        metrics_data = P.load_metrics(str(src_mi))
+        model_data = P.load_model_results(str(mdl_path))
+        tables = P.build_eval_table(metrics_data, P.compute_deltas(model_data),
+                                    model_data.get("categories", []))
+        info = [m for m in P.CONDITIONAL_KEY if m in metrics_data]
+        baseline = {m: model_data["results"]["no_text"][m]["overall"].get("mse")
+                    for m in model_data["models"]
+                    if m in model_data["results"].get("no_text", {})}
+        if fn == "correlation_trends":
+            viz.plot_correlation_trends(tables, info, scores_dict=baseline,
+                                        perf_metric="mse",
+                                        save_path=_fig("figure3_mi_vs_mse.png"))
+        else:
+            viz.plot_model_mixture(tables, info, model_data.get("categories", []),
+                                   perf_metric="mse",
+                                   save_path=_fig("figure4_mixture.png"))
+
+
+def figures_realworld() -> None:
+    """Figure 5 — the real-world MI grid."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from src.mmtt_bench import viz
+    P = _plot_module()
+    rows, data = P.load_realworld_results("joint")
+    if not rows:
+        return skip("Figure 5", "no real-world results under results/ (run 02 and 03)")
+    viz.plot_realworld_mi_grid(rows, data, save_path=_fig("figure5_realworld_mi.png"))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--which", default="all",
                     choices=["all", "mmtt_bench", "timemmd", "fintexts"])
+    ap.add_argument("--tables-only", action="store_true",
+                    help="skip the figures")
+    ap.add_argument("--figures-only", action="store_true",
+                    help="skip the tables")
     ap.add_argument("--list", action="store_true", help="show the artifact manifest and exit")
     args = ap.parse_args()
 
@@ -265,6 +373,18 @@ def main() -> None:
         return
 
     print(f"Reading results from {RESULTS}\n")
+    if args.figures_only:
+        import matplotlib
+        matplotlib.use("Agg")
+        if args.which in ("all", "mmtt_bench"):
+            print("MMTT-Bench figures:")
+            figures_mmtt_bench()
+        if args.which in ("all", "timemmd", "fintexts"):
+            print("Real-world figures:")
+            figures_realworld()
+        print(f"\nFigures → {OUT_FIGURES.relative_to(ROOT)}/")
+        return
+
     if args.which in ("all", "mmtt_bench"):
         print("MMTT-Bench:")
         table_8()
@@ -279,12 +399,17 @@ def main() -> None:
                     "MI estimator results under PatchTST tokenisation.")
         table_10()
         table_12()
+        if not args.tables_only:
+            figures_mmtt_bench()
     if args.which in ("all", "timemmd", "fintexts"):
         print("Real-world:")
         table_13()
+        if not args.tables_only:
+            figures_realworld()
 
-    print(f"\nTables in {OUT_TABLES.relative_to(ROOT)}/")
-    print("Figures are not yet wired up — pending the final figure selection.")
+    print(f"\nTables  → {OUT_TABLES.relative_to(ROOT)}/")
+    if not args.tables_only:
+        print(f"Figures → {OUT_FIGURES.relative_to(ROOT)}/")
 
 
 if __name__ == "__main__":
