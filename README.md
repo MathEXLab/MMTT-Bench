@@ -93,8 +93,7 @@ MM_TSF_ROOT=../MM-TSFlib/data ./reproduce/02_timemmd.sh
 ```
 
 The Time-MMD CSVs are not redistributed here. Six domains are used; Economy and
-Security are excluded, having fewer than 300 training samples per category and
-no usable validation split.
+Security are excluded, as they have too few points.
 
 Time-MMD mixes sampling frequencies and the CFA window settings differ by
 frequency, so MI runs twice: `final_configs/timemmd.yaml` covers the monthly
@@ -157,33 +156,6 @@ joint estimate against the series-only value.
 Drawing lives in `src/mmtt_bench/viz.py`, loading in `plot.py`. Retired
 plotting code is kept in `to-delete/` with a note on what replaced it.
 
-### Which command produces what
-
-| Paper artifact | Command |
-|---|---|
-| Table 4 encoder sweep | `01_mmtt_bench.sh` → `make_artifacts.py` |
-| Table 5 PCA sweep | `01_mmtt_bench.sh` → `make_artifacts.py` |
-| Table 6 lookback sweep | `01_mmtt_bench.sh` → `make_artifacts.py` |
-| Table 7 PatchTST sweep | `01_mmtt_bench.sh` → `make_artifacts.py` |
-| Table 8 conditional MI | `01_mmtt_bench.sh` → `make_artifacts.py` |
-| Table 9 downstream MSE | `01_mmtt_bench.sh` → `make_artifacts.py` |
-| Table 10 shuffle control | `01_mmtt_bench.sh` → `make_artifacts.py` |
-| Table 11 observation noise | `01_mmtt_bench.sh` → `make_artifacts.py` |
-| Table 12 temporal jitter | `01_mmtt_bench.sh` → `make_artifacts.py` |
-| Table 13 dataset features | `02` + `03` → `make_artifacts.py` |
-| Tables 17–18 real-world | `02` + `03` → `make_artifacts.py` |
-| Figure 1 annotations | `plot.py --figure1` |
-| Figure 2 sweeps | `01_mmtt_bench.sh` → `plot.py --figure2` |
-| Figure 3 MI vs MSE | `01_mmtt_bench.sh` → `plot.py --metrics ... --models ...` |
-| Figure 4 mixture | `01_mmtt_bench.sh` → `plot.py --metrics ... --models ...` |
-| Figure 5 real-world MI | `02` + `03` → `plot.py --figure5` |
-| Figure 6 embeddings | `viz.plot_2d_embeddings` |
-
-Tables 1, 3, 14, 15 and 16 are static — estimator properties and hyperparameter
-listings — and are not generated.
-
----
-
 ## Running a single experiment
 
 The reproduce scripts are thin wrappers over two entry points, both of which
@@ -219,8 +191,6 @@ and `train.py` pick up automatically.
 
 ---
 
-
----
 
 ## Configuration reference
 
