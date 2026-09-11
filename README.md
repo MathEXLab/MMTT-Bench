@@ -1,6 +1,6 @@
 # MMTT-Bench: Multiodal Text Time Series Benchmark
 
-This repository is the official implementation of [When Does Text Inform? Benchmarking Information-Theoretic Metrics for Multimodal Time-Series Forecasting](Under Review).
+This repository is the official implementation of [When Does Text Inform? Benchmarking Information-Theoretic Metrics for Multimodal Time-Series Forecasting](https://arxiv.org/abs/2609.11282).
 
 A synthetic benchmark for measuring whether natural language annotations carry information about future time series values, and whether regression models can exploit that information. The benchmark combines controlled signal generation with ground-truth annotation categories to give reproducible measurements via information theory and supervised regression.
 
@@ -329,17 +329,19 @@ sweep:
 Add a class to `src/mmtt-bench/metrics.py` implementing `.compute(category_data, pca_dim, rng, pca_text, **kwargs) -> dict`, register it in the `METRICS` dict, and include it in the `metrics:` block of any config. The result dict must follow the same key convention as `MutualInformationMetric` — see the module docstring for the expected structure.
 
 ---
-<!-- 
-## Citation
 
+## Citation
 ```bibtex
-@article{,
-  title   = {Can LLMs Use Text to Improve Time Series Forecasting?},
-  author  = {},
-  journal = {},
-  year    = {2025},
+@preprint{andrews2026doestextinform,
+      title={When Does Text Inform? Benchmarking Information-Theoretic Metrics for Multimodal Time-Series Forecasting}, 
+      author={Emma Andrews and Gianmarco Mengaldo},
+      year={2026},
+      eprint={2609.11282},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI},
+      url={https://arxiv.org/abs/2609.11282}, 
 }
-``` -->
+```
 
 ---
 
