@@ -98,12 +98,6 @@ datasets:
     freq:       monthly
     categories: ['correct', 'incorrect', 'irrelevant']
 
-  - name:       Economy
-    train_json: datasets/timemmd_cfa_splits/Economy/train.json
-    val_json:   datasets/timemmd_cfa_splits/Economy/val.json
-    freq:       monthly
-    categories: ['correct', 'incorrect', 'irrelevant']
-
   - name:       Energy
     train_json: datasets/timemmd_cfa_splits/Energy/train.json
     val_json:   datasets/timemmd_cfa_splits/Energy/val.json
@@ -114,12 +108,6 @@ datasets:
     train_json: datasets/timemmd_cfa_splits/PublicHealth/train.json
     val_json:   datasets/timemmd_cfa_splits/PublicHealth/val.json
     freq:       weekly
-    categories: ['correct', 'incorrect', 'irrelevant']
-
-  - name:       Security
-    train_json: datasets/timemmd_cfa_splits/Security/train.json
-    val_json:   datasets/timemmd_cfa_splits/Security/val.json
-    freq:       monthly
     categories: ['correct', 'incorrect', 'irrelevant']
 
   - name:       SocialGood
