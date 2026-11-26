@@ -8,7 +8,7 @@ embedding_type: sentence_transformer
 model_name:     sentence-transformers/all-distilroberta-v1
 ts_tokenizer:   patch
 horizon_steps:  1
-lookback_steps: 1
+lookback_steps: 2
 patch_len:      1
 stride:         1
 

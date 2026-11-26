@@ -52,6 +52,17 @@ metrics:
   mutual_information:
     n_neighbours: 1
     n_subsample_reps: 20
+  mine:
+    mine_iters: 500
+    n_bootstrap: 20
+    mine_batch_size: 256
+    lr: 0.0001
+  infonce:
+    n_bootstrap: 20
+    hidden_dim:  128
+    n_iters:     500
+    batch_size:  256     # ceiling on MI = log(256) ≈ 5.5 nats
+    lr:          0.001
   cca:
     n_bootstrap: 20
     eps: 1e-5

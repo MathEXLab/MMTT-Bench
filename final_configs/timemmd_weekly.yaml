@@ -31,7 +31,7 @@ model_name:     sentence-transformers/all-distilroberta-v1
 
 # ── Metric settings ───────────────────────────────────────────────────────────
 compute_kwargs:
-  pca_dim:     5
+  pca_dim:     16
   n_bootstrap: 20
   strategy:    quantile
 
@@ -39,28 +39,28 @@ metrics:
   mutual_information:
     n_neighbours: 1
     n_subsample_reps:  20
-  # mine:
-  #    mine_iters: 500
-  #    n_bootstrap: 5
-  #    mine_batch_size: 256
-  #    lr: 0.0001
-  # infonce:
-  #    n_bootstrap: 20   # point estimate — training is slow
-  #    hidden_dim:  128
-  #    n_iters:     500
-  #    batch_size:  256     # ceiling on MI = log(64) ≈ 4.2 nats
-  #    lr:          0.001
-  # cca:
-  #   n_bootstrap: 20    # same as KSG for fair variance comparison
-  #   eps: 1e-5   
-  # v_information:
-  #   cv: 5
-  #   n_bootstrap:  20
-  # pid:
-  #   n_clusters_ts:   4
-  #   n_clusters_text: 16
-  #   n_bins_y:        4
-  #   n_bootstrap:  20
+  mine:
+    mine_iters: 500
+    n_bootstrap: 20
+    mine_batch_size: 256
+    lr: 0.0001
+  infonce:
+    n_bootstrap: 20
+    hidden_dim:  128
+    n_iters:     500
+    batch_size:  256     # ceiling on MI = log(256) ≈ 5.5 nats
+    lr:          0.001
+  cca:
+    n_bootstrap: 20
+    eps: 1e-5
+  v_information:
+    cv: 5
+    n_bootstrap:  20
+  pid:
+    n_clusters_ts:   4
+    n_clusters_text: 16
+    n_bins_y:        4
+    n_bootstrap:  20
 
 # ── Weekly datasets ───────────────────────────────────────────────────────────
 # datasets:
